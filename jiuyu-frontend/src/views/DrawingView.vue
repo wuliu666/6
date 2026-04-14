@@ -233,6 +233,7 @@ const fetchModels = async () => {
 
 onMounted(() => {
   fetchModels()
+  
 })
 
 const handleGenerate = async () => {
