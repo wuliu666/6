@@ -365,6 +365,9 @@ async def upload_asset(
     file: UploadFile = File(..., description="你要上传的图片/文件"),
     asset_type: str = Form(..., description="填 'team' (团队素材) 或 'personal' (个人私密)"),
     user_id: int = Form(..., description="上传者的用户 ID (临时手动填，未来由登录系统自动获取)"),
+    prompt: Optional[str] = Form(None), # 接收提示词
+    ratio: Optional[str] = Form(None),  # 接收比例
+    style: Optional[str] = Form(None),  # 接收风格
     db: Session = Depends(get_db)
 ):
     """
@@ -419,11 +422,14 @@ async def upload_asset(
 
     # 💾 最后：把这条资产记录存入数据库
     new_asset = models.Asset(
-        user_id=user_id,
-        storage_type=storage_type,
-        file_url=file_url,
-        asset_type=asset_type
-    )
+            user_id=user_id,
+            storage_type=storage_type,
+            file_url=file_url,
+            asset_type=asset_type,
+            prompt=prompt,  # 💡 真正写入数据库
+            ratio=ratio,
+            style=style
+        )
     db.add(new_asset)
     db.commit()
 

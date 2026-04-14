@@ -105,11 +105,19 @@
           class="generated-image"
           :preview-src-list="[currentImage]"
         />
-        <div class="image-actions">
-          <el-button type="success" plain round @click="saveToAssets">
-            <el-icon class="el-icon--left"><Download /></el-icon> 存入我的素材库
-          </el-button>
-        </div>
+        <div class="image-actions" v-if="currentImage">
+        
+        
+        <el-button type="success" @click="saveToAssets">上传个人素材库</el-button>
+
+        <el-button 
+          v-if="userRole === 'admin'" 
+          type="warning" 
+          @click="saveToTeamAssets"
+        >
+          上传团队素材库
+        </el-button>
+      </div>
       </div>
     </div>
   </div>
@@ -154,7 +162,8 @@ const submitDraw = async () => {
 const isGenerating = ref(false)
 const isLoadingModels = ref(false) 
 const availableModels = ref([])    
-const currentImage = ref('')       
+const currentImage = ref('')      
+const userRole = ref('user') // 💡 新增：记录当前用户的角色权限 
 
 // ==========================================
 // 📸 垫图转 Base64 逻辑引擎 (复刻自旧版)
@@ -233,14 +242,38 @@ const fetchModels = async () => {
 
 onMounted(() => {
   fetchModels()
-  // 💡 解决刷新丢失：从会话缓存中恢复刚生成的画作 URL
+  
+  // 💡 1. 身份识别
+  try {
+    const userStr = localStorage.getItem('jiuyu_user')
+    if (userStr) {
+      const user = JSON.parse(userStr)
+      userRole.value = user.role || 'user'
+    }
+  } catch (e) {
+    console.error('解析角色权限失败', e)
+  }
+
+  // 💡 2. 解决刷新丢失
   const savedDraft = sessionStorage.getItem('jiuyu_draft_image')
   if (savedDraft) {
     currentImage.value = savedDraft
   }
+
+  // 💡 3. 核心：接收从素材库传回来的灵感参数
+  const reuseData = sessionStorage.getItem('jiuyu_reuse_params')
+  if (reuseData) {
+    try {
+      const params = JSON.parse(reuseData)
+      drawParams.prompt = params.prompt || ''
+      if (params.ratio) drawParams.ratio = params.ratio
+      if (params.style) drawParams.style = params.style
+      
+      sessionStorage.removeItem('jiuyu_reuse_params') // 阅后即焚
+      ElMessage.success('🪄 已为您还原历史灵感参数！')
+    } catch (e) {}
+  }
 })
-
-
 
 const handleGenerate = async () => {
   if (!drawParams.prompt.trim()) {
@@ -256,16 +289,19 @@ const handleGenerate = async () => {
   currentImage.value = '' 
 
   try {
+    // 数据透传给 FastAPI
     const response = await api.post('/drawing/generate', {
       prompt: drawParams.prompt,
-      ratio: drawParams.ratio,
+      model: drawParams.model,
+      aspectRatio: drawParams.ratio,
+      imageSize: drawParams.size,
       style: drawParams.style,
-      model: drawParams.model 
+      urls: drawParams.referenceImages 
     })
     
     if (response.data.status === 'success') {
       currentImage.value = response.data.image_url
-      // 💡 记录到会话缓存，这样刷新页面后 onMounted 就能把它抓回来
+      // 💡 记录到会话缓存，这样刷新页面后 onMounted 就能把它抓回来展示
       sessionStorage.setItem('jiuyu_draft_image', response.data.image_url)
       ElMessage.success('🎉 绝密画作生成完毕！')
     }
@@ -277,7 +313,7 @@ const handleGenerate = async () => {
 }
 
 // ==========================================
-// 🚀 零成本入库：将图片打包进浏览器的私密空间
+// 🚀 闭环入库：将画作上传至【服务器硬盘】的专属素材库
 // ==========================================
 const saveToAssets = async () => {
   if (!currentImage.value) {
@@ -286,42 +322,88 @@ const saveToAssets = async () => {
   }
 
   try {
-    ElMessage.info('📥 正在进行本地私密化存储...')
+    ElMessage.info('📥 正在将灵感上传至服务器个人素材库...')
     
-    // 1. 从网络上把图片抓取到前端内存中
+    // 1. 将第三方 AI 平台返回的临时图片 URL 抓取下来，转为纯净的二进制 Blob 文件流
     const res = await fetch(currentImage.value)
     const blob = await res.blob()
     
-    // 2. 将图片转换为 Base64 文本格式 (这是 IndexedDB 最喜欢的格式)
-    const reader = new FileReader()
-    reader.onloadend = async () => {
-      const base64data = reader.result
-      
-      // 3. 构建你在旧版中设计的数据结构
-      const assetObj = {
-        id: 'local_asset_' + Date.now().toString(36), // 生成唯一ID
-        title: `AI灵感_${new Date().toLocaleTimeString('zh-CN', {hour12:false})}`,
-        type: 'image',
-        prompt: drawParams.prompt,
-        image: base64data,     // 原图存本地
-        thumb: base64data,     // 缩略图存本地
-        library_mode: 'personal',
-        created_at: Date.now(),
-        // 绑定当前用户，即使换账号登录，本地数据也能根据账号隔离
-        uploader_key: localStorage.getItem('jiuyu_token') || 'Creator' 
-      }
-
-      // 4. 写入浏览器的 IndexedDB！
-      await saveToLocalDB(assetObj)
-      ElMessage.success('🎉 灵感已成功封入本地浏览器！0服务器占用！')
-    }
+    /// 2. 构建上传包 (指定 asset_type 为 personal，后端会自动把它存在本地硬盘 /uploads/personal/ 下)
+    const formData = new FormData()
+    const filename = `AI_Draft_${Date.now()}.png`
+    formData.append('file', blob, filename)
+    formData.append('asset_type', 'personal') 
+    // 💡 将画板当前的参数一同打包发给后端
+    formData.append('prompt', drawParams.prompt)
+    formData.append('ratio', drawParams.ratio)
+    formData.append('style', drawParams.style)
     
-    // 启动读取
-    reader.readAsDataURL(blob)
+    // 从 localStorage 解析当前登录用户 ID (用于后端创建 user_{id} 专属文件夹)
+    const userStr = localStorage.getItem('jiuyu_user')
+    const userId = userStr ? JSON.parse(userStr).id : 1
+    formData.append('user_id', userId)
 
+    // 3. 发起真实的 HTTP POST 上传请求给你的服务器
+    const uploadRes = await api.post('/assets/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
+    
+    if (uploadRes.data.status === 'success') {
+      ElMessage.success('🎉 绝妙灵感已成功封入服务器个人素材库！')
+    } else {
+      ElMessage.error(uploadRes.data.message || '上传失败')
+    }
   } catch (error) {
-    console.error(error)
-    ElMessage.error('本地存储失败，可能是浏览器安全策略拦截了图片拉取。')
+    console.error('上传异常:', error)
+    ElMessage.error('入库失败，请检查网关配置或后端存储权限。')
+  }
+}
+
+// ==========================================
+// 👑 管理员专供：将灵感上传至团队共享库 (asset_type: 'team')
+// ==========================================
+const saveToTeamAssets = async () => {
+  if (!currentImage.value) {
+    ElMessage.warning('请先生成一张画作再上传哦！')
+    return
+  }
+
+  try {
+    ElMessage.info('📡 正在将作品同步至团队共享库...')
+    
+    // 1. 获取图片文件流
+    const res = await fetch(currentImage.value)
+    const blob = await res.blob()
+    
+    // 2. 构建上传包 (这里告诉后端资产类型是 team)
+    const formData = new FormData()
+    const filename = `Team_Asset_${Date.now()}.png`
+    formData.append('file', blob, filename)
+    formData.append('asset_type', 'team') // 👉 核心分发标识
+    // 💡 将画板当前的参数一同打包发给后端
+    formData.append('prompt', drawParams.prompt)
+    formData.append('ratio', drawParams.ratio)
+    formData.append('style', drawParams.style)
+    
+    const userStr = localStorage.getItem('jiuyu_user')
+    const userId = userStr ? JSON.parse(userStr).id : 1
+    formData.append('user_id', userId)
+
+    // 3. 发送给 FastAPI 后端
+    const uploadRes = await api.post('/assets/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+    
+    if (uploadRes.data.status === 'success') {
+      ElMessage.success('🎉 团队素材上传成功！所有成员均可在素材库查看。')
+    } else {
+      ElMessage.error(uploadRes.data.message || '上传失败')
+    }
+  } catch (error) {
+    console.error('上传团队库失败:', error)
+    ElMessage.error('上传失败，请检查网络连接或管理员权限。')
   }
 }
 

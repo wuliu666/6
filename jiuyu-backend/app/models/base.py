@@ -30,6 +30,9 @@ class Asset(Base):
     storage_type = Column(String(20), nullable=False)   # 'TENCENT_COS' 或 'LOCAL'
     file_url = Column(String(500), nullable=False)
     asset_type = Column(String(50))
+    prompt = Column(String(1000), nullable=True)        # 新增：保存提示词
+    ratio = Column(String(50), nullable=True)           # 新增：保存比例
+    style = Column(String(50), nullable=True)           # 新增：保存风格
     created_at = Column(DateTime, default=datetime.utcnow)
     
     owner = relationship("User", back_populates="assets")

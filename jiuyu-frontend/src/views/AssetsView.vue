@@ -40,8 +40,14 @@
           <div class="image-info">
             <span class="image-name">素材 {{ index + 1 }}</span>
             
-            <div class="actions" v-if="user.role === 'admin'">
-              <el-button type="danger" size="small" circle plain @click="handleDelete(img)">
+            <div class="actions">
+              <el-tooltip content="提取灵感参数并重画">
+                <el-button type="primary" size="small" circle plain @click="reuseInspiration(img)">
+                  <el-icon><RefreshRight /></el-icon>
+                </el-button>
+              </el-tooltip>
+
+              <el-button v-if="user.role === 'admin'" type="danger" size="small" circle plain @click="handleDelete(img)" style="margin-left: 5px;">
                 <el-icon><Delete /></el-icon>
               </el-button>
             </div>
@@ -56,7 +62,8 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Upload, Delete } from '@element-plus/icons-vue'
+import { Upload, Delete, RefreshRight } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
 
 const currentView = ref('team')
 const imageList = ref([])
@@ -151,6 +158,18 @@ const handleDelete = (asset) => {
   }).catch(() => {
     // 点了取消，什么都不做
   })
+}
+
+// 💡 灵感回流：将参数打包存入缓存并跳转
+const router = useRouter()
+const reuseInspiration = (img) => {
+  const reuseParams = {
+    prompt: img.prompt || '',
+    ratio: img.ratio || '1:1',
+    style: img.style || 'none'
+  }
+  sessionStorage.setItem('jiuyu_reuse_params', JSON.stringify(reuseParams))
+  router.push('/dashboard/drawing')
 }
 </script>
 
