@@ -620,3 +620,5 @@ async def get_available_models(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=f"获取模型列表失败: {str(e)}")
     
     
+    
+    

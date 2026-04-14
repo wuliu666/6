@@ -27,12 +27,46 @@
       </div>
 
       <div class="control-group">
-        <label>画面比例</label>
-        <el-select v-model="drawParams.ratio" placeholder="选择比例" style="width: 100%">
-          <el-option label="1:1 (正方形头像)" value="1:1" />
-          <el-option label="16:9 (电脑壁纸/横屏)" value="16:9" />
-          <el-option label="9:16 (手机壁纸/竖屏)" value="9:16" />
-        </el-select>
+        <label>画面比例与清晰度</label>
+        <div style="display: flex; gap: 10px;">
+          <el-select v-model="drawParams.ratio" placeholder="比例" style="flex: 1;">
+            <el-option label="智能 (Auto)" value="auto" />
+            <el-option label="1:1 (头像)" value="1:1" />
+            <el-option label="16:9 (电脑横屏)" value="16:9" />
+            <el-option label="9:16 (手机竖屏)" value="9:16" />
+            <el-option label="21:9 (宽幅电影)" value="21:9" />
+            <el-option label="3:4" value="3:4" />
+          </el-select>
+          <el-select v-model="drawParams.size" placeholder="清晰度" style="flex: 1;">
+            <el-option label="高清 2K" value="2K" />
+            <el-option label="超清 4K" value="4K" />
+          </el-select>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <label>参考垫图 (最多10张)</label>
+        <el-upload
+          action="#"
+          list-type="picture-card"
+          :auto-upload="false"
+          :on-change="handleImageUpload"
+          :show-file-list="false"
+          class="reference-upload"
+        >
+          <div style="display: flex; flex-direction: column; align-items: center; color: #909399;">
+            <span style="font-size: 24px; font-weight: 300;">+</span>
+          </div>
+        </el-upload>
+        
+        <div v-if="drawParams.referenceImages.length > 0" class="upload-preview-container">
+          <div v-for="(img, index) in drawParams.referenceImages" :key="index" class="preview-item">
+            <el-image :src="img" fit="cover" />
+            <div class="preview-delete" @click.stop="removeReferenceImage(index)" title="移除此垫图">
+              ✕
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="control-group">
@@ -95,15 +129,56 @@ api.interceptors.request.use(config => {
 
 const drawParams = reactive({
   prompt: '',
-  ratio: '1:1',
+  ratio: '16:9',
+  size: '2K',
   style: 'none',
-  model: '' 
+  model: '',
+  referenceImages: [] 
 })
+
+
+// 🚀 发送请求时
+const submitDraw = async () => {
+  const response = await fetch('http://localhost:8000/drawing/generate', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      // 'Authorization': `Bearer ${token}` 记得带上你系统里的 token
+    },
+    // 把所有的参数完整发给咱们自己的后端！
+    body: JSON.stringify(drawParams.value) 
+  });
+  // ... 处理返回结果
+}
 
 const isGenerating = ref(false)
 const isLoadingModels = ref(false) 
 const availableModels = ref([])    
 const currentImage = ref('')       
+
+// ==========================================
+// 📸 垫图转 Base64 逻辑引擎 (复刻自旧版)
+// ==========================================
+const handleImageUpload = (uploadFile) => {
+  if (drawParams.referenceImages.length >= 10) {
+    ElMessage.warning('⚠️ 最多只能上传 10 张图片作为参考垫图！')
+    return false
+  }
+  if (!uploadFile.raw.type.startsWith('image/')) {
+    ElMessage.warning('请上传合法的图片文件！')
+    return false
+  }
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    drawParams.referenceImages.push(e.target.result)
+  }
+  reader.readAsDataURL(uploadFile.raw)
+  return false // 拦截 Element Plus 的默认网络上传
+}
+
+const removeReferenceImage = (index) => {
+  drawParams.referenceImages.splice(index, 1)
+}
 
 // ==========================================
 // 🚀 核心黑科技：浏览器本地 IndexedDB 引擎
@@ -237,6 +312,8 @@ const saveToAssets = async () => {
     ElMessage.error('本地存储失败，可能是浏览器安全策略拦截了图片拉取。')
   }
 }
+
+
 </script>
 
 <style scoped>
