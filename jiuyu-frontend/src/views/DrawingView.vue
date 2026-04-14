@@ -233,8 +233,14 @@ const fetchModels = async () => {
 
 onMounted(() => {
   fetchModels()
-  
+  // 💡 解决刷新丢失：从会话缓存中恢复刚生成的画作 URL
+  const savedDraft = sessionStorage.getItem('jiuyu_draft_image')
+  if (savedDraft) {
+    currentImage.value = savedDraft
+  }
 })
+
+
 
 const handleGenerate = async () => {
   if (!drawParams.prompt.trim()) {
@@ -259,6 +265,8 @@ const handleGenerate = async () => {
     
     if (response.data.status === 'success') {
       currentImage.value = response.data.image_url
+      // 💡 记录到会话缓存，这样刷新页面后 onMounted 就能把它抓回来
+      sessionStorage.setItem('jiuyu_draft_image', response.data.image_url)
       ElMessage.success('🎉 绝密画作生成完毕！')
     }
   } catch (error) {
