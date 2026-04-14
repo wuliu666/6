@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 import re
+from typing import List, Optional
 
 # 引入腾讯云 COS SDK
 from qcloud_cos import CosConfig
@@ -603,7 +604,7 @@ async def generate_image(request: DrawRequest, current_user: str = Depends(get_c
         raise HTTPException(status_code=500, detail=f"绘图引擎调用失败: {str(e)}")
     
 @app.get("/drawing/models", tags=["AI 创作"], summary="🔍 动态获取可用模型列表")
-async def get_available_models(current_user: dict = Depends(get_current_user)):
+async def get_available_models(): # 👈 移除了 Depends(get_current_user)，允许前端免密拉取菜单
     try:
         # 直接向网关索要它当前配置的所有模型清单！
         models_response = await ai_client.models.list()
@@ -611,13 +612,11 @@ async def get_available_models(current_user: dict = Depends(get_current_user)):
         # 把复杂的响应数据精简成一个纯名字的列表
         model_names = [model.id for model in models_response.data]
         
-        # 可选优化：因为网关里可能有文本模型(gpt-4)也有画图模型
-        # 如果你只想要画图相关的，可以在这里做个简单的关键词过滤
-        # draw_models = [m for m in model_names if "dall" in m or "mj" in m or "sd" in m or "journey" in m]
-        
         return {"status": "success", "models": model_names}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取模型列表失败: {str(e)}")
+        # 👈 核心：在后端终端打印出真实的报错原因（比如 API Key 错啦，网址连不上啦）
+        print(f"❌ 警告：无法连接 New API 网关获取名单，原因: {str(e)}") 
+        raise HTTPException(status_code=500, detail=f"网关连接异常: {str(e)}")
     
     
     

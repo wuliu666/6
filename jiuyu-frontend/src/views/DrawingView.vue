@@ -222,7 +222,10 @@ const fetchModels = async () => {
       }
     }
   } catch (error) {
-    ElMessage.error('无法连接网关获取模型列表')
+    // 💡 核心：把真正的死因打印在控制台，并在页面右上角弹窗！
+    const errorMsg = error.response?.data?.detail || error.message || '未知网络错误'
+    console.error("❌ 模型菜单拉取失败详情：", errorMsg)
+    ElMessage.error(`菜单拉取失败: ${errorMsg}`)
   } finally {
     isLoadingModels.value = false
   }
