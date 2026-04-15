@@ -80,7 +80,7 @@ import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 
-// 💡 配置专属的网络请求
+// 💡 配置专属的网络请
 const api = axios.create({ baseURL: 'http://127.0.0.1:8000' })
 api.interceptors.request.use(config => {
   const token = localStorage.getItem('jiuyu_token')
