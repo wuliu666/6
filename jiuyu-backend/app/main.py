@@ -517,7 +517,7 @@ async def generate_image(request: DrawRequest, current_user: str = Depends(get_c
                     "model": request.model,
                     "prompt": final_prompt,
                     "urls": request.urls,           # 👉 接收前端传来的 Base64 数组
-                    "aspectRatio": request.ratio,   # 👉 接收前端选择的比例
+                    "aspectRatio": request.aspectRatio,   # 👉 接收前端选择的比例
                     "imageSize": request.imageSize  # 👉 接收前端选择的分辨率
                 }
             else:

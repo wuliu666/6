@@ -42,7 +42,7 @@
                 <el-checkbox 
                   v-for="item in predefinedRatios" 
                   :key="item.value" 
-                  :label="item"
+                  :label="item.value"
                   border
                 >
                   {{ item.label }}
@@ -55,7 +55,7 @@
                 <el-checkbox 
                   v-for="item in predefinedSizes" 
                   :key="item.value" 
-                  :label="item"
+                  :label="item.value"
                   border
                 >
                   {{ item.label }}
@@ -80,7 +80,6 @@ import { ref, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 
-// 💡 配置专属的网络请求
 const api = axios.create({ baseURL: 'http://127.0.0.1:8000' })
 api.interceptors.request.use(config => {
   const token = localStorage.getItem('jiuyu_token')
@@ -107,28 +106,27 @@ const predefinedSizes = [
 ]
 
 // --- 响应式数据 ---
-const allModels = ref([])
-const savedConfigs = ref({})// 用于把数据库里的配置暂存在前台
+const allModels = ref([]) 
 const loading = ref(false)
+const savedConfigs = ref({}) 
+
 const currentConfig = ref({
   model_name: '',
   is_image_model: true
 })
 
+// 💡 注意：现在这两个数组里只存纯字符串，如 ['1:1', '16:9']
 const selectedRatios = ref([])
 const selectedSizes = ref([])
 
 // --- 逻辑函数 ---
 
-// 1. 获取所有模型列表 (用于下拉框选择)
 const fetchAllModels = async () => {
   try {
     const res = await api.get('/drawing/models') 
-    // 💡 修复点2：精准剥离后端返回的 {"status": "success", "models": [...]}
     if (res.data && res.data.status === 'success') {
       allModels.value = res.data.models
     } else if (Array.isArray(res.data)) {
-      // 兼容旧格式（以防万一）
       allModels.value = res.data
     }
   } catch (err) {
@@ -136,35 +134,6 @@ const fetchAllModels = async () => {
   }
 }
 
-// 2. 保存配置到后端数据库
-const saveConfig = async () => {
-  if (!currentConfig.value.model_name) return ElMessage.warning('请输入模型名称')
-  
-  loading.value = true
-  const payload = {
-    model_name: currentConfig.value.model_name,
-    is_image_model: currentConfig.value.is_image_model,
-    supported_ratios: selectedRatios.value,
-    supported_sizes: selectedSizes.value
-  }
-
-  try {
-    const res = await api.post('/admin/model-configs/update', payload)
-    if (res.data.status === 'success') {
-      ElMessage.success(res.data.message)
-    }
-  } catch (err) {
-    ElMessage.error('同步失败，请检查后端 API')
-  } finally {
-    loading.value = false
-  }
-}
-
-onMounted(() => {
-  fetchAllModels()
-})
-
-// 💡 拉取历史配置
 const fetchSavedConfigs = async () => {
   try {
     const res = await api.get('/drawing/model-configs')
@@ -176,29 +145,58 @@ const fetchSavedConfigs = async () => {
   }
 }
 
-// 💡 监听模型切换，自动打勾 (终极修复 Vue 对象引用天坑)
-watch(() => currentConfig.value.model_name, (newModel) => {
-  if (newModel && savedConfigs.value[newModel]) {
-    const historyConfig = savedConfigs.value[newModel]
+// 💡 修复点 3：严密监听模型和配置库变化。收到数据后，剥离成纯字符串给 UI 显示
+watch([() => currentConfig.value.model_name, savedConfigs], ([newModel, configs]) => {
+  if (newModel && configs && configs[newModel]) {
+    const historyConfig = configs[newModel]
     currentConfig.value.is_image_model = historyConfig.is_image_model !== false
     
-    // 💡 核心修复：不能用克隆，必须拿着数据库的值，去 predefined 列表里把“原配对象”找出来！
-    selectedRatios.value = (historyConfig.ratios || []).map(savedItem => 
-      predefinedRatios.find(p => p.value === savedItem.value) || savedItem
-    )
-    
-    selectedSizes.value = (historyConfig.sizes || []).map(savedItem => 
-      predefinedSizes.find(p => p.value === savedItem.value) || savedItem
-    )
-    
+    // 只提取纯字符串 value 扔进数组，绝对能精确打上勾
+    selectedRatios.value = (historyConfig.ratios || [])
+      .map(item => typeof item === 'string' ? item : item.value)
+      .filter(Boolean)
+      
+    selectedSizes.value = (historyConfig.sizes || [])
+      .map(item => typeof item === 'string' ? item : item.value)
+      .filter(Boolean)
+      
   } else {
-    // 选了新模型，清空勾选
     currentConfig.value.is_image_model = true
     selectedRatios.value = []
     selectedSizes.value = []
   }
-})
+}, { immediate: true, deep: true })
 
+const saveConfig = async () => {
+  if (!currentConfig.value.model_name) return ElMessage.warning('请输入模型名称')
+  
+  loading.value = true
+  
+  // 💡 修复点 4：给后端发送请求前，悄悄把纯字符串还原成复杂的完整对象
+  const payload = {
+    model_name: currentConfig.value.model_name,
+    is_image_model: currentConfig.value.is_image_model,
+    supported_ratios: selectedRatios.value.map(val => predefinedRatios.find(p => p.value === val)),
+    supported_sizes: selectedSizes.value.map(val => predefinedSizes.find(p => p.value === val))
+  }
+
+  try {
+    const res = await api.post('/admin/model-configs/update', payload)
+    if (res.data.status === 'success') {
+      ElMessage.success(res.data.message)
+      await fetchSavedConfigs() // 保存完立即刷新暂存，防丢失
+    }
+  } catch (err) {
+    ElMessage.error('同步失败，请检查后端 API')
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(() => {
+  fetchAllModels()
+  fetchSavedConfigs()
+})
 </script>
 
 <style scoped>
