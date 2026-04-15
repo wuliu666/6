@@ -30,44 +30,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# =========================================================
-# ⚙️ 模型能力注册表 (Config-Driven UI 中心)
-# 未来有新模型、新尺寸，只需修改这里，前端自动更新！
-# =========================================================
-@app.get("/drawing/model-configs")
-async def get_model_configs():
-    return {
-        "status": "success",
-        "configs": {
-            # 针对 Nano Banana 系列
-            "nano-banana-2": {
-                "ratios": [
-                    {"label": "1:1 正方 (通用/头像)", "value": "1:1"},
-                    {"label": "16:9 横屏 (电脑壁纸)", "value": "16:9"},
-                    {"label": "9:16 竖屏 (手机海报)", "value": "9:16"},
-                    {"label": "4:3 传统横版", "value": "4:3"},
-                    {"label": "3:4 传统竖版", "value": "3:4"}
-                ],
-                "sizes": [
-                    {"label": "标清 1K (出图快/省算力)", "value": "1K"},
-                    {"label": "高清 2K (细节丰富)", "value": "2K"},
-                    {"label": "超清 4K (极致画质/较慢)", "value": "4K"}
-                ]
-            },
-            # 针对官方 DALL-E-3 (示例，防止你以后接入)
-            "dall-e-3": {
-                "ratios": [
-                    {"label": "1:1 正方", "value": "1:1"},
-                    {"label": "宽屏", "value": "16:9"},
-                    {"label": "竖屏", "value": "9:16"}
-                ],
-                "sizes": [
-                    {"label": "标准 1024x1024", "value": "1024x1024"}
-                ]
-            }
-            # ... 未来如果有 mj 等模型，直接在这里往下加即可
-        }
-    }
+
 
 # 开启静态文件代理：把本地的 uploads 文件夹暴露到 /uploads 网址下
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
@@ -649,66 +612,124 @@ async def update_model_config(req: ConfigUpdateRequest, db: Session = Depends(ge
     return {"status": "success", "message": f"🎉 模型 [{req.model_name}] 配置已成功同步至全站！"}
 
 
-# --- 2. 读接口：生图板拉取最新的模型配置 ---
+# ⚙️ 模型能力注册表 (全站动态 Config-Driven 中心)
+# =========================================================
 @app.get("/drawing/model-configs")
-async def get_dynamic_model_configs(db: Session = Depends(get_db)):
-    # 过滤掉对话模型，只查出被标记为“绘图模型”的配置
-    image_models = db.query(models.ModelConfig).filter(models.ModelConfig.is_image_model == True).all()
+def get_dynamic_model_configs(db: Session = Depends(get_db)):
+    import json
     
-    configs_dict = {}
-    for m in image_models:
-        # 组装成前端需要的字典格式，并加个保底防止空数组报错
-        configs_dict[m.model_name] = {
-            "ratios": m.supported_ratios if m.supported_ratios else [{"label": "默认比例 (1:1)", "value": "1:1"}],
-            "sizes": m.supported_sizes if m.supported_sizes else [{"label": "默认尺寸 (1K)", "value": "1K"}]
+    # 💡 核心改变：不再用假数据，直接去数据库里把你刚才配置的抽屉全拉出来！
+    db_configs = db.query(models.ModelConfig).all()
+    
+    result_configs = {}
+    for config in db_configs:
+        # 因为存入数据库时可能被转成了字符串，这里安全地解析成数组
+        try:
+            ratios = json.loads(config.supported_ratios) if isinstance(config.supported_ratios, str) else config.supported_ratios
+            sizes = json.loads(config.supported_sizes) if isinstance(config.supported_sizes, str) else config.supported_sizes
+        except:
+            ratios = config.supported_ratios
+            sizes = config.supported_sizes
+            
+        result_configs[config.model_name] = {
+            "is_image_model": config.is_image_model,
+            "ratios": ratios,
+            "sizes": sizes
         }
         
-    return {"status": "success", "configs": configs_dict}
+    return {"status": "success", "configs": result_configs}
 
 @app.get("/drawing/models", tags=["AI 创作"], summary="🔍 动态获取可用模型列表")
-async def get_available_models(): # 👈 移除了 Depends(get_current_user)，允许前端免密拉取菜单
+async def get_available_models():
+    import requests
+    import os
+    import json
+    
+    # 严谨清理 URL
+    base_url = os.getenv("AI_BASE_URL", "").strip().rstrip("/")
+    base_url = base_url.replace("/api", "").replace("/v1", "")
+    
+    api_key = os.getenv("AI_API_KEY", "").strip()
+    url = f"{base_url}/v1/models"
+    
+    print(f"\n=====================================")
+    print(f"🔗 正在请求画板模型: {url}")
+    print(f"🔑 使用密钥: {api_key[:10]}......")
+    
     try:
-        # 直接向网关索要它当前配置的所有模型清单！
-        models_response = await ai_client.models.list()
+        headers = {"Authorization": f"Bearer {api_key}"}
+        # 发送请求，允许跳转，看看它到底要把我们带到哪个网页
+        resp = requests.get(url, headers=headers, timeout=10)
         
-        # 把复杂的响应数据精简成一个纯名字的列表
-        model_names = [model.id for model in models_response.data]
+        raw_text = resp.text.strip()
         
-        return {"status": "success", "models": model_names}
+        print(f"📄 网关状态码: {resp.status_code}")
+        print(f"📄 网关扔回来的网页内容 (前200字): \n{raw_text[:200]}")
+        print(f"=====================================\n")
+        
+        # 🛡️ 如果网关返回的是网页
+        if raw_text.startswith("<"):
+            # 💡 关键修改：不再抛出异常，而是把错误当作一个“假模型”返回给前端显示！
+            return {"status": "success", "models": [f"⚠️ 拦截: 网关返回了网页 (HTTP {resp.status_code})"]}
+            
+        data = json.loads(raw_text)
+        
+        # ✅ 成功解析，提取模型
+        if "data" in data:
+            model_names = [m.get("id") for m in data.get("data", [])]
+            return {"status": "success", "models": model_names}
+        elif "error" in data:
+            err_msg = data["error"].get("message", "未知错误")
+            return {"status": "success", "models": [f"⚠️ 密钥错误: {err_msg}"]}
+        else:
+            return {"status": "success", "models": ["⚠️ 返回了未知的 JSON 结构"]}
+            
     except Exception as e:
-        # 👈 核心：在后端终端打印出真实的报错原因（比如 API Key 错啦，网址连不上啦）
-        print(f"❌ 警告：无法连接 New API 网关获取名单，原因: {str(e)}") 
-        raise HTTPException(status_code=500, detail=f"网关连接异常: {str(e)}")
+        print(f"❌ 画板拉取模型异常: {str(e)}")
+        # 即使断网，也不报500，优雅地告诉前端
+        return {"status": "success", "models": [f"⚠️ 请求断开: {str(e)}"]}
     
 # =========================================================
-# 📡 NewAPI 模型极速抓取通道 (走标准正门，100%不会被拦截)
+# 📡 管理后台：NewAPI 模型极速抓取通道 (防弹容错版)
 # =========================================================
 @app.get("/admin/newapi/models")
-def get_newapi_models():
-    # 直接读取你用于生图的、正确的 API 基础地址和 sk- 密钥
-    base_url = os.getenv("AI_BASE_URL", "").rstrip("/")
-    if not base_url.endswith("/v1"):
-        base_url += "/v1"
-        
-    api_key = os.getenv("AI_API_KEY", "")
+def get_admin_newapi_models():
+    import requests
+    import os
+    import json
     
-    if not api_key.startswith("sk-"):
-        return {"status": "error", "message": "请确保 .env 里的 AI_API_KEY 是以 sk- 开头的正确密钥"}
-        
+    # 严谨清理 URL，防止 /api 或 /v1 拼错
+    base_url = os.getenv("AI_BASE_URL", "").strip().rstrip("/")
+    base_url = base_url.replace("/api", "").replace("/v1", "")
+    
+    api_key = os.getenv("AI_API_KEY", "").strip()
+    url = f"{base_url}/v1/models"
+    
     try:
-        # 直接大摇大摆调用标准 /v1/models 接口
-        url = f"{base_url}/models"
         headers = {"Authorization": f"Bearer {api_key}"}
+        resp = requests.get(url, headers=headers, timeout=10, allow_redirects=False)
+        raw_text = resp.text.strip()
         
-        resp = requests.get(url, headers=headers, timeout=10)
-        data = resp.json()
-        
+        # 拦截网页错误
+        if raw_text.startswith("<"):
+            return {"status": "error", "message": f"网关返回了网页代码 (HTTP {resp.status_code})，请检查网关状态"}
+            
+        # 尝试解析 JSON
+        try:
+            data = json.loads(raw_text)
+        except json.JSONDecodeError:
+            return {"status": "error", "message": "网关返回的数据不是合法的 JSON 格式"}
+            
+        # ✅ 成功提取模型
         if "data" in data:
-            # 提取出所有的模型名称 (id)
-            model_list = [m.get("id") for m in data.get("data", [])]
-            return {"status": "success", "models": model_list}
+            model_names = [m.get("id") for m in data.get("data", [])]
+            return {"status": "success", "models": model_names}
+        elif "error" in data:
+            err_msg = data["error"].get("message", "未知错误")
+            return {"status": "error", "message": f"网关报错: {err_msg}"}
         else:
-            return {"status": "error", "message": f"网关返回异常：{data.get('error', data)}"}
+            return {"status": "error", "message": "返回了未知的 JSON 结构"}
             
     except Exception as e:
         return {"status": "error", "message": f"请求异常: {str(e)}"}
+    

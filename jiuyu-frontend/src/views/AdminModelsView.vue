@@ -18,9 +18,9 @@
           >
             <el-option
               v-for="model in allModels"
-              :key="model.id"
-              :label="model.id"
-              :value="model.id"
+              :key="model"
+              :label="model"
+              :value="model"
             />
           </el-select>
           <div class="form-tip">提示：您可以直接从下拉框选择网关已有的模型，也可以手动输入新模型名。</div>
@@ -76,11 +76,11 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 
-// 💡 配置专属的网络请
+// 💡 配置专属的网络请求
 const api = axios.create({ baseURL: 'http://127.0.0.1:8000' })
 api.interceptors.request.use(config => {
   const token = localStorage.getItem('jiuyu_token')
@@ -88,7 +88,7 @@ api.interceptors.request.use(config => {
   return config
 })
 
-// --- 预设模板字典 (你想加什么，直接在下面数组里添一行即可) ---
+// --- 预设模板字典 ---
 const predefinedRatios = [
   { label: '1:1 正方', value: '1:1' },
   { label: '16:9 横屏', value: '16:9' },
@@ -107,7 +107,8 @@ const predefinedSizes = [
 ]
 
 // --- 响应式数据 ---
-const allModels = ref([]) // 存储从网关拉取的原始模型列表
+const allModels = ref([])
+const savedConfigs = ref({})// 用于把数据库里的配置暂存在前台
 const loading = ref(false)
 const currentConfig = ref({
   model_name: '',
@@ -122,8 +123,14 @@ const selectedSizes = ref([])
 // 1. 获取所有模型列表 (用于下拉框选择)
 const fetchAllModels = async () => {
   try {
-    const res = await api.get('/drawing/models') // 调用你现有的拉取接口
-    allModels.value = res.data
+    const res = await api.get('/drawing/models') 
+    // 💡 修复点2：精准剥离后端返回的 {"status": "success", "models": [...]}
+    if (res.data && res.data.status === 'success') {
+      allModels.value = res.data.models
+    } else if (Array.isArray(res.data)) {
+      // 兼容旧格式（以防万一）
+      allModels.value = res.data
+    }
   } catch (err) {
     console.error('模型列表拉取失败')
   }
@@ -156,6 +163,42 @@ const saveConfig = async () => {
 onMounted(() => {
   fetchAllModels()
 })
+
+// 💡 拉取历史配置
+const fetchSavedConfigs = async () => {
+  try {
+    const res = await api.get('/drawing/model-configs')
+    if (res.data && res.data.status === 'success') {
+      savedConfigs.value = res.data.configs 
+    }
+  } catch (err) {
+    console.error('配置反显拉取失败')
+  }
+}
+
+// 💡 监听模型切换，自动打勾 (终极修复 Vue 对象引用天坑)
+watch(() => currentConfig.value.model_name, (newModel) => {
+  if (newModel && savedConfigs.value[newModel]) {
+    const historyConfig = savedConfigs.value[newModel]
+    currentConfig.value.is_image_model = historyConfig.is_image_model !== false
+    
+    // 💡 核心修复：不能用克隆，必须拿着数据库的值，去 predefined 列表里把“原配对象”找出来！
+    selectedRatios.value = (historyConfig.ratios || []).map(savedItem => 
+      predefinedRatios.find(p => p.value === savedItem.value) || savedItem
+    )
+    
+    selectedSizes.value = (historyConfig.sizes || []).map(savedItem => 
+      predefinedSizes.find(p => p.value === savedItem.value) || savedItem
+    )
+    
+  } else {
+    // 选了新模型，清空勾选
+    currentConfig.value.is_image_model = true
+    selectedRatios.value = []
+    selectedSizes.value = []
+  }
+})
+
 </script>
 
 <style scoped>

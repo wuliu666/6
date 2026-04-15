@@ -131,7 +131,7 @@
 
 
 <script setup>
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, watch } from 'vue'
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 
@@ -260,6 +260,30 @@ const currentSizes = computed(() => {
   const config = modelConfigs.value[drawParams.model]
   return config ? config.sizes : [{ label: '默认 1K', value: '1K' }]
 })
+
+// ==========================================
+// 💡 神仙代码：监听比例和尺寸变化，自动修正“幽灵残影”！
+// ==========================================
+watch(currentRatios, (newRatios) => {
+  if (newRatios && newRatios.length > 0) {
+    // 检查画板当前的比例，还在不在最新的可选列表里
+    const isExist = newRatios.some(r => r.value === drawParams.ratio)
+    if (!isExist) {
+      // 如果不在了（比如后台没配16:9），就强制把它变成新列表里的第一个！
+      drawParams.ratio = newRatios[0].value || newRatios[0]
+    }
+  }
+}, { immediate: true })
+
+watch(currentSizes, (newSizes) => {
+  if (newSizes && newSizes.length > 0) {
+    const isExist = newSizes.some(s => s.value === drawParams.size)
+    if (!isExist) {
+      drawParams.size = newSizes[0].value || newSizes[0]
+    }
+  }
+}, { immediate: true })
+// ==========================================
 
 // 💡 拉取配置的函数
 const fetchModelConfigs = async () => {
