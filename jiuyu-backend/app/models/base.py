@@ -30,9 +30,9 @@ class Asset(Base):
     storage_type = Column(String(20), nullable=False)   # 'TENCENT_COS' 或 'LOCAL'
     file_url = Column(String(500), nullable=False)
     asset_type = Column(String(50))
-    prompt = Column(String(1000), nullable=True)        # 新增：保存提示词
-    ratio = Column(String(50), nullable=True)           # 新增：保存比例
-    style = Column(String(50), nullable=True)           # 新增：保存风格
+    prompt = Column(String(1000), nullable=True)        # 💡 正式入库：保存提示词
+    ratio = Column(String(50), nullable=True)           # 💡 正式入库：保存比例
+    style = Column(String(50), nullable=True)           # 💡 正式入库：保存风格
     created_at = Column(DateTime, default=datetime.utcnow)
     
     owner = relationship("User", back_populates="assets")
@@ -45,3 +45,20 @@ class ApiChannel(Base):
     api_key = Column(String(255), nullable=False)
     base_url = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True)
+
+from sqlalchemy import JSON, Boolean
+
+# =========================================================
+# ⚙️ 模型动态配置表 (大厂标准动态注册中心)
+# =========================================================
+class ModelConfig(Base):
+    __tablename__ = "model_configs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    model_name = Column(String(100), unique=True, index=True, nullable=False) # 模型名称，如 nano-banana-2
+    provider = Column(String(50), default="default") # 供应商，如 grsai
+    is_image_model = Column(Boolean, default=False)  # 开关：True为绘图模型，False为对话模型
+    
+    # 使用 JSON 字段直接存储下拉框配置！完美解决写死代码的问题！
+    supported_ratios = Column(JSON, default=list) 
+    supported_sizes = Column(JSON, default=list)

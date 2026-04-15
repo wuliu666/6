@@ -98,18 +98,38 @@ api.interceptors.request.use(config => {
 })
 
 const fetchAssets = async () => {
-  try {
-    const response = await api.get('/assets', {
-      params: {
-        asset_type: currentView.value,
-        user_id: user.id || 1
+  imageList.value = [] // 切换标签时先清空画廊
+  
+  if (currentView.value === 'personal') {
+    // 💡 个人素材：直接从用户本地电脑硬盘 (IndexedDB) 中提取
+    const req = indexedDB.open('NineRainLocalAssetsDB', 1)
+    req.onsuccess = e => {
+      const db = e.target.result
+      if (!db.objectStoreNames.contains('assets')) return
+      const store = db.transaction('assets', 'readonly').objectStore('assets')
+      store.getAll().onsuccess = (ev) => {
+        // 倒序排列，最新画的在最前面展示
+        imageList.value = ev.target.result.reverse()
       }
-    })
-    if (response.data.status === 'success') {
-      imageList.value = response.data.assets
     }
-  } catch (error) {
-    ElMessage.error('拉取历史素材失败，请检查网络')
+    req.onerror = () => {
+      ElMessage.error('无法读取本地私密素材库')
+    }
+  } else {
+    // 💡 团队素材：维持原状，向后端服务器索要
+    try {
+      const response = await api.get('/assets', {
+        params: {
+          asset_type: 'team',
+          user_id: user.id || 1
+        }
+      })
+      if (response.data.status === 'success') {
+        imageList.value = response.data.assets
+      }
+    } catch (error) {
+      ElMessage.error('拉取团队素材失败，请检查网络')
+    }
   }
 }
 
@@ -135,10 +155,10 @@ const handleUploadError = (err) => {
   ElMessage.error('上传请求被拒绝，请检查后端运行状态！')
 }
 
-// 💥 毁灭级操作：删除素材
+// 💥 毁灭级操作：删除素材 (智能双擎判断)
 const handleDelete = (asset) => {
   ElMessageBox.confirm(
-    '此操作将把素材从数据库和硬盘/云端彻底粉碎，确定要继续吗？',
+    '此操作将把素材彻底粉碎，确定要继续吗？',
     '高危警告',
     {
       confirmButtonText: '执行粉碎',
@@ -147,17 +167,31 @@ const handleDelete = (asset) => {
     }
   ).then(async () => {
     try {
-      const response = await api.delete(`/assets/${asset.id}`)
-      if (response.data.status === 'success') {
-        ElMessage.success(response.data.message)
-        fetchAssets() // 重新拉取画廊，你会看到图片瞬间消失
+      // 💡 智能判断：如果当前是个人素材页面，去删本地 IndexedDB
+      if (currentView.value === 'personal') {
+        const req = indexedDB.open('NineRainLocalAssetsDB', 1)
+        req.onsuccess = e => {
+          const db = e.target.result
+          const tx = db.transaction('assets', 'readwrite')
+          tx.objectStore('assets').delete(asset.id)
+          tx.oncomplete = () => {
+            ElMessage.success('🗑️ 本地私密素材已粉碎')
+            fetchAssets() // 重新刷新列表
+          }
+        }
+      } 
+      // 💡 否则：向后端发送请求，删除服务器/云端的团队素材
+      else {
+        const response = await api.delete(`/assets/${asset.id}`)
+        if (response.data.status === 'success') {
+          ElMessage.success(response.data.message)
+          fetchAssets() 
+        }
       }
     } catch (error) {
       ElMessage.error('粉碎失败，请检查网络或查看后端报错')
     }
-  }).catch(() => {
-    // 点了取消，什么都不做
-  })
+  }).catch(() => {})
 }
 
 // 💡 灵感回流：将参数打包存入缓存并跳转

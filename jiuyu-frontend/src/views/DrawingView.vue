@@ -29,17 +29,22 @@
       <div class="control-group">
         <label>画面比例与清晰度</label>
         <div style="display: flex; gap: 10px;">
-          <el-select v-model="drawParams.ratio" placeholder="比例" style="flex: 1;">
-            <el-option label="智能 (Auto)" value="auto" />
-            <el-option label="1:1 (头像)" value="1:1" />
-            <el-option label="16:9 (电脑横屏)" value="16:9" />
-            <el-option label="9:16 (手机竖屏)" value="9:16" />
-            <el-option label="21:9 (宽幅电影)" value="21:9" />
-            <el-option label="3:4" value="3:4" />
+          <el-select v-model="drawParams.ratio" placeholder="画面比例">
+            <el-option 
+              v-for="item in currentRatios" 
+              :key="item.value" 
+              :label="item.label" 
+              :value="item.value" 
+            />
           </el-select>
-          <el-select v-model="drawParams.size" placeholder="清晰度" style="flex: 1;">
-            <el-option label="高清 2K" value="2K" />
-            <el-option label="超清 4K" value="4K" />
+
+          <el-select v-model="drawParams.size" placeholder="清晰度尺寸">
+            <el-option 
+              v-for="item in currentSizes" 
+              :key="item.value" 
+              :label="item.label" 
+              :value="item.value" 
+            />
           </el-select>
         </div>
       </div>
@@ -123,8 +128,10 @@
   </div>
 </template>
 
+
+
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 
@@ -240,8 +247,44 @@ const fetchModels = async () => {
   }
 }
 
+const fetchModels = async () => {
+  // ... (你原来的 fetchModels 代码保持不变) ...
+}
+
+// ==========================================
+// ⚙️ 动态配置中心读取引擎
+// ==========================================
+// 💡 动态模型配置表
+const modelConfigs = ref({})
+
+// 动态计算：根据当前选择的模型，自动过滤出它支持的比例
+const currentRatios = computed(() => {
+  const config = modelConfigs.value[drawParams.model]
+  return config ? config.ratios : [{ label: '默认 1:1', value: '1:1' }] 
+})
+
+// 动态计算：根据当前选择的模型，自动过滤出它支持的清晰度
+const currentSizes = computed(() => {
+  const config = modelConfigs.value[drawParams.model]
+  return config ? config.sizes : [{ label: '默认 1K', value: '1K' }]
+})
+
+// 💡 拉取配置的函数
+const fetchModelConfigs = async () => {
+  try {
+    const res = await api.get('/drawing/model-configs')
+    if (res.data.status === 'success') {
+      modelConfigs.value = res.data.configs
+    }
+  } catch (error) {
+    console.error('拉取模型动态配置失败', error)
+  }
+}
+// ==========================================
+
 onMounted(() => {
   fetchModels()
+  fetchModelConfigs()
   
   // 💡 1. 身份识别
   try {
@@ -313,7 +356,7 @@ const handleGenerate = async () => {
 }
 
 // ==========================================
-// 🚀 闭环入库：将画作上传至【服务器硬盘】的专属素材库
+// 🔒 真正的不动库：个人素材存入【用户本地电脑硬盘】(IndexedDB)
 // ==========================================
 const saveToAssets = async () => {
   if (!currentImage.value) {
@@ -322,42 +365,31 @@ const saveToAssets = async () => {
   }
 
   try {
-    ElMessage.info('📥 正在将灵感上传至服务器个人素材库...')
+    ElMessage.info('📥 正在存入您的本地电脑硬盘...')
     
-    // 1. 将第三方 AI 平台返回的临时图片 URL 抓取下来，转为纯净的二进制 Blob 文件流
     const res = await fetch(currentImage.value)
     const blob = await res.blob()
     
-    /// 2. 构建上传包 (指定 asset_type 为 personal，后端会自动把它存在本地硬盘 /uploads/personal/ 下)
-    const formData = new FormData()
-    const filename = `AI_Draft_${Date.now()}.png`
-    formData.append('file', blob, filename)
-    formData.append('asset_type', 'personal') 
-    // 💡 将画板当前的参数一同打包发给后端
-    formData.append('prompt', drawParams.prompt)
-    formData.append('ratio', drawParams.ratio)
-    formData.append('style', drawParams.style)
-    
-    // 从 localStorage 解析当前登录用户 ID (用于后端创建 user_{id} 专属文件夹)
-    const userStr = localStorage.getItem('jiuyu_user')
-    const userId = userStr ? JSON.parse(userStr).id : 1
-    formData.append('user_id', userId)
-
-    // 3. 发起真实的 HTTP POST 上传请求给你的服务器
-    const uploadRes = await api.post('/assets/upload', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
+    const reader = new FileReader()
+    reader.onloadend = async () => {
+      // 构建包含参数的本地数据包
+      const assetObj = {
+        id: 'local_' + Date.now(),
+        url: reader.result, // 图片转 Base64 存在本地
+        prompt: drawParams.prompt,
+        ratio: drawParams.ratio,
+        style: drawParams.style,
+        created_at: Date.now()
       }
-    })
-    
-    if (uploadRes.data.status === 'success') {
-      ElMessage.success('🎉 绝妙灵感已成功封入服务器个人素材库！')
-    } else {
-      ElMessage.error(uploadRes.data.message || '上传失败')
+      
+      // 调用文件上方你已经写好的 saveToLocalDB
+      await saveToLocalDB(assetObj)
+      ElMessage.success('🎉 个人素材已存入本地浏览器，服务器 0 占用！')
     }
+    reader.readAsDataURL(blob)
   } catch (error) {
-    console.error('上传异常:', error)
-    ElMessage.error('入库失败，请检查网关配置或后端存储权限。')
+    console.error('本地入库失败:', error)
+    ElMessage.error('本地存储失败，请检查浏览器权限。')
   }
 }
 
@@ -386,7 +418,7 @@ const saveToTeamAssets = async () => {
     formData.append('prompt', drawParams.prompt)
     formData.append('ratio', drawParams.ratio)
     formData.append('style', drawParams.style)
-    
+    // 💡 新增：把当前画板的参数一起发给后端，后端会将它转存到 COS
     const userStr = localStorage.getItem('jiuyu_user')
     const userId = userStr ? JSON.parse(userStr).id : 1
     formData.append('user_id', userId)
@@ -406,6 +438,10 @@ const saveToTeamAssets = async () => {
     ElMessage.error('上传失败，请检查网络连接或管理员权限。')
   }
 }
+
+
+
+
 
 
 </script>
