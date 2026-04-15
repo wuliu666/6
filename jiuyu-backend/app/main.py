@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 import re
 from typing import List, Optional, Dict
+import requests
 
 # 引入腾讯云 COS SDK
 from qcloud_cos import CosConfig
@@ -103,6 +104,9 @@ class DrawRequest(BaseModel):
 # 📦 管理员模型配置的接收数据包
 # =========================================================
 class ConfigUpdateRequest(BaseModel):
+    # 💡 告诉 Pydantic：别管我用 model_ 开头的变量名，闭嘴
+    model_config = {"protected_namespaces": ()} 
+    
     model_name: str
     is_image_model: bool
     supported_ratios: List[Dict[str, str]]
@@ -676,6 +680,35 @@ async def get_available_models(): # 👈 移除了 Depends(get_current_user)，�
         print(f"❌ 警告：无法连接 New API 网关获取名单，原因: {str(e)}") 
         raise HTTPException(status_code=500, detail=f"网关连接异常: {str(e)}")
     
+# =========================================================
+# 📡 NewAPI 模型极速抓取通道 (走标准正门，100%不会被拦截)
+# =========================================================
+@app.get("/admin/newapi/models")
+def get_newapi_models():
+    # 直接读取你用于生图的、正确的 API 基础地址和 sk- 密钥
+    base_url = os.getenv("AI_BASE_URL", "").rstrip("/")
+    if not base_url.endswith("/v1"):
+        base_url += "/v1"
+        
+    api_key = os.getenv("AI_API_KEY", "")
     
-    
-    
+    if not api_key.startswith("sk-"):
+        return {"status": "error", "message": "请确保 .env 里的 AI_API_KEY 是以 sk- 开头的正确密钥"}
+        
+    try:
+        # 直接大摇大摆调用标准 /v1/models 接口
+        url = f"{base_url}/models"
+        headers = {"Authorization": f"Bearer {api_key}"}
+        
+        resp = requests.get(url, headers=headers, timeout=10)
+        data = resp.json()
+        
+        if "data" in data:
+            # 提取出所有的模型名称 (id)
+            model_list = [m.get("id") for m in data.get("data", [])]
+            return {"status": "success", "models": model_list}
+        else:
+            return {"status": "error", "message": f"网关返回异常：{data.get('error', data)}"}
+            
+    except Exception as e:
+        return {"status": "error", "message": f"请求异常: {str(e)}"}

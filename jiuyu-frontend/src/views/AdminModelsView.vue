@@ -78,7 +78,15 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import api from '../main' // 确保指向你的 axios 实例
+import axios from 'axios'
+
+// 💡 配置专属的网络请求
+const api = axios.create({ baseURL: 'http://127.0.0.1:8000' })
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem('jiuyu_token')
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
 
 // --- 预设模板字典 (你想加什么，直接在下面数组里添一行即可) ---
 const predefinedRatios = [

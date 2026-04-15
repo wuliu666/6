@@ -27,26 +27,14 @@ const router = createRouter({
           path: 'drawing',
           component: () => import('../views/DrawingView.vue')
         },
-        { 
-          path: 'storyboard', 
-          component: () => import('../views/StoryboardView.vue') 
-        },
-        {
-          path: 'assets',
-          component: () => import('../views/AssetsView.vue')
-        },
+      
         {
           path: 'admin-models',
           name: 'admin-models',
           component: () => import('../views/AdminModelsView.vue'),
           meta: { title: '模型能力管理' }
-        },
+        }
         
-
-        
-        
-        
-
     
       ]
     }
