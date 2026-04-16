@@ -79,6 +79,15 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Upload, Delete, RefreshRight } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 
+// 💡 核心补漏 1：组装发报机 (api)，让它知道往哪个后台地址发请求
+const api = axios.create({
+  baseURL: 'http://127.0.0.1:8000'
+})
+
+// 💡 核心补漏 2：从浏览器保险箱里拿出当前登录者的身份证 (user)
+const userStr = localStorage.getItem('jiuyu_user')
+const user = userStr ? ref(JSON.parse(userStr)) : ref({ id: 1, role: 'user' })
+
 const currentView = ref('team')
 // 💡 绝杀技 3 核心：双数组截流引擎
 const imageList = ref([])     // 蓄水池：存放从数据库拉来的 10000 张图的数据 (只占内存，不耗 CPU)
@@ -118,9 +127,11 @@ const fetchAssets = async () => {
     req.onerror = () => { ElMessage.error('无法读取本地私密素材库') }
   } else {
     try {
-      const response = await api.get('/assets', {
-        params: { asset_type: 'team', user_id: user.id || 1 }
-      })
+      // 💡 核心修复：直接暴力拼接 URL 参数，防止任何 api 封装工具丢参！
+      // (兼容各种 user 定义方式，就算找不到 user 也默认传 1)
+      const currentUserId = user?.value?.id || user?.id || 1
+      const response = await api.get(`/assets?asset_type=team&user_id=${currentUserId}`)
+      
       if (response.data.status === 'success') {
         imageList.value = response.data.assets
         loadMore() // 💡 数据就位，立刻释放第一批 30 张图上屏幕！
