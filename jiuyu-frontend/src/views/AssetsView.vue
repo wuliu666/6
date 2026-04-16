@@ -30,11 +30,13 @@
       style="margin-bottom: 20px; border-radius: 8px;"
     />
 
-    <div class="gallery">
-      <el-empty v-if="imageList.length === 0" description="这里空空如也，快去上传第一张素材吧！" />
+    <div class="gallery" v-infinite-scroll="loadMore" :infinite-scroll-distance="200">
+      <el-empty v-if="displayList.length === 0" description="这里空空如也，快去上传第一张素材吧！" />
       
       <div v-else class="image-grid">
-        <el-card v-for="(img, index) in imageList" :key="index" class="image-card" shadow="hover" :body-style="{ padding: '0px' }">
+        <el-card 
+          v-for="(img, index) in displayList" 
+          :key="index" class="image-card" shadow="hover" :body-style="{ padding: '0px' }">
           
           <el-image :src="getThumbUrl(img)" fit="cover" class="image-preview" :preview-src-list="[img.url]" lazy>
             <template #placeholder>
@@ -78,66 +80,50 @@ import { Upload, Delete, RefreshRight } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 
 const currentView = ref('team')
-const imageList = ref([])
+// 💡 绝杀技 3 核心：双数组截流引擎
+const imageList = ref([])     // 蓄水池：存放从数据库拉来的 10000 张图的数据 (只占内存，不耗 CPU)
+const displayList = ref([])   // 展示区：只存放屏幕上要渲染的卡片
+const pageSize = 30           // 每次往下划，释放 30 张图出来
+let currentPage = 1           // 当前切片游标
 
-const showSafetyTip = ref(sessionStorage.getItem('local_safety_tip_closed') !== 'true')
-
-const handleCloseTip = () => {
-  showSafetyTip.value = false
-  sessionStorage.setItem('local_safety_tip_closed', 'true')
+// 滑动到底部时自动触发的函数
+const loadMore = () => {
+  if (displayList.value.length >= imageList.value.length && imageList.value.length > 0) return
+  const start = (currentPage - 1) * pageSize
+  const end = currentPage * pageSize
+  const nextBatch = imageList.value.slice(start, end)
+  if (nextBatch.length > 0) {
+    displayList.value.push(...nextBatch)
+    currentPage++
+  }
 }
 
-const user = JSON.parse(localStorage.getItem('jiuyu_user') || '{}')
-
-const uploadData = computed(() => {
-  return {
-    asset_type: currentView.value,
-    user_id: user.id || 1
-  }
-})
-
-
-// 🔌 配置后端基准地址
-const api = axios.create({ baseURL: 'http://127.0.0.1:8000' })
-
-// 🛡️ 给信使加配：每次向后端发请求前，自动把本地保险箱里的 Token 掏出来举在头顶
-api.interceptors.request.use(config => {
-  const token = localStorage.getItem('jiuyu_token')
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`
-  }
-  return config
-})
-
 const fetchAssets = async () => {
-  imageList.value = [] // 切换标签时先清空画廊
+  // 每次刷新或切换 Tab，彻底清空水池和展示区
+  imageList.value = [] 
+  displayList.value = []
+  currentPage = 1
   
   if (currentView.value === 'personal') {
-    // 💡 个人素材：直接从用户本地电脑硬盘 (IndexedDB) 中提取
     const req = indexedDB.open('NineRainLocalAssetsDB', 1)
     req.onsuccess = e => {
       const db = e.target.result
       if (!db.objectStoreNames.contains('assets')) return
       const store = db.transaction('assets', 'readonly').objectStore('assets')
       store.getAll().onsuccess = (ev) => {
-        // 倒序排列，最新画的在最前面展示
         imageList.value = ev.target.result.reverse()
+        loadMore() // 💡 数据就位，立刻释放第一批 30 张图上屏幕！
       }
     }
-    req.onerror = () => {
-      ElMessage.error('无法读取本地私密素材库')
-    }
+    req.onerror = () => { ElMessage.error('无法读取本地私密素材库') }
   } else {
-    // 💡 团队素材：维持原状，向后端服务器索要
     try {
       const response = await api.get('/assets', {
-        params: {
-          asset_type: 'team',
-          user_id: user.id || 1
-        }
+        params: { asset_type: 'team', user_id: user.id || 1 }
       })
       if (response.data.status === 'success') {
         imageList.value = response.data.assets
+        loadMore() // 💡 数据就位，立刻释放第一批 30 张图上屏幕！
       }
     } catch (error) {
       ElMessage.error('拉取团队素材失败，请检查网络')
@@ -270,6 +256,10 @@ const getThumbUrl = (img) => {
   border-radius: 8px;
   overflow: hidden;
   transition: transform 0.3s;
+  
+  /* 💡 大厂底层黑科技：原生 DOM 节点回收 */
+  content-visibility: auto;      /* 只要这张卡片滚出屏幕，浏览器自动卸载它的渲染计算 */
+  contain-intrinsic-size: 250px; /* 告诉浏览器卸载后给它保留个 250px 的空气占位，防止滚动条乱跳 */
 }
 
 .image-card:hover {
