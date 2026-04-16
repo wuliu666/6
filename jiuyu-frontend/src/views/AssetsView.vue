@@ -8,11 +8,9 @@
 
       <el-upload
         class="upload-btn"
-        action="http://127.0.0.1:8000/assets/upload"
+        action="#"
         :show-file-list="false"
-        :data="uploadData"
-        :on-success="handleUploadSuccess"
-        :on-error="handleUploadError"
+        :http-request="customUpload"
       >
         <el-button type="primary" size="large" round>
           <el-icon class="el-icon--left"><Upload /></el-icon> 
@@ -120,7 +118,17 @@ const fetchAssets = async () => {
       if (!db.objectStoreNames.contains('assets')) return
       const store = db.transaction('assets', 'readonly').objectStore('assets')
       store.getAll().onsuccess = (ev) => {
-        imageList.value = ev.target.result.reverse()
+        const rawData = ev.target.result.reverse()
+        
+        // 💡 绝杀技 4 读取端：在显存中瞬间生成极度轻量的 blob 虚拟短链接
+        imageList.value = rawData.map(item => {
+          return {
+            ...item,
+            // 如果是高级的 Blob 二进制或 File，瞬间生成虚拟链接；如果是老旧 Base64 或网络 URL，原样兼容
+            url: (item.url instanceof Blob || item.url instanceof File) ? URL.createObjectURL(item.url) : item.url
+          }
+        })
+        
         loadMore() // 💡 数据就位，立刻释放第一批 30 张图上屏幕！
       }
     }
@@ -150,19 +158,52 @@ watch(currentView, () => {
   fetchAssets()
 })
 
-// 🌟 核心修改点：这里现在变得非常简洁，直接调用 fetchAssets 去数据库拿最新列表
-const handleUploadSuccess = (response) => {
-  if (response.status === 'success') {
-    ElMessage.success(`上传成功！存储引擎：${response.storage}`)
-    fetchAssets()
+// 💡 绝杀技 4 存入端：原生文件双通道分拣引擎
+const customUpload = async (options) => {
+  const rawFile = options.file // 这就是那个极度原始、没有被任何转码污染的 File 对象(Blob)
+  
+  if (currentView.value === 'personal') {
+    // 🏠 个人模式：不转码，直接把几十 MB 的 File 二进制对象瞬间砸进本地数据库！
+    const assetObj = {
+      id: 'local_' + Date.now(),
+      url: rawFile, // 💡 重点：直接存 File 对象，零计算开销，极致省硬盘！
+      prompt: '外部手动上传',
+      created_at: Date.now()
+    }
+    
+    const req = indexedDB.open('NineRainLocalAssetsDB', 1)
+    req.onsuccess = e => {
+      const db = e.target.result
+      const tx = db.transaction('assets', 'readwrite')
+      tx.objectStore('assets').put(assetObj)
+      tx.oncomplete = () => {
+        ElMessage.success('⚡ 私密素材已极速存入本地！(0延迟)')
+        fetchAssets() // 重新拉取展示
+      }
+    }
   } else {
-    ElMessage.error(response.message || '上传失败，请重试')
+    // 🌐 团队模式：手动打包装车，发给服务器
+    const formData = new FormData()
+    formData.append('file', rawFile)
+    formData.append('asset_type', 'team')
+    formData.append('user_id', user.value?.id || 1) 
+    
+    try {
+      const res = await api.post('/assets/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+      if (res.data.status === 'success') {
+        ElMessage.success(`🎉 云端上传成功！存储引擎：${res.data.storage}`)
+        fetchAssets()
+      } else {
+        ElMessage.error(res.data.message || '上传失败')
+      }
+    } catch (error) {
+      ElMessage.error('云端服务器开小差了，请检查网络')
+    }
   }
 }
 
-const handleUploadError = (err) => {
-  ElMessage.error('上传请求被拒绝，请检查后端运行状态！')
-}
 
 // 💥 毁灭级操作：删除素材 (智能双擎判断)
 const handleDelete = (asset) => {
