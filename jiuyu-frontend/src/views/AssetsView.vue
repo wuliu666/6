@@ -220,6 +220,16 @@ const reuseInspiration = (img) => {
   // 💡 核心修复：必须带上 /dashboard 父级路径，否则会白屏
   router.push('/dashboard/drawing') 
 }
+
+// 💡 绝杀技 1：云端动态切图引擎 (借助腾讯云数据万象，一毫秒极速切出微小 WebP)
+const getThumbUrl = (img) => {
+  if (!img || !img.url) return ''
+  if (img.storage === 'TENCENT_COS' || img.url.includes('myqcloud.com')) {
+    return `${img.url}?imageMogr2/thumbnail/400x/format/webp/interlace/1`
+  }
+  return img.url // 本地图片 0 延迟，直接返回
+}
+
 </script>
 
 <style scoped>
