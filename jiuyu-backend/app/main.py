@@ -381,8 +381,10 @@ async def upload_asset(
     file: UploadFile = File(..., description="你要上传的图片/文件"),
     asset_type: str = Form(..., description="填 'team' (团队素材) 或 'personal' (个人私密)"),
     user_id: int = Form(..., description="上传者的用户 ID"),
-    prompt: Optional[str] = Form(""),   # 💡 接收参数
+    prompt: Optional[str] = Form(""),   
     ratio: Optional[str] = Form("1:1"),
+    size: Optional[str] = Form(""),     # 💡 补漏：接收前端传来的尺寸
+    model: Optional[str] = Form(""),    # 💡 补漏：接收前端传来的模型
     style: Optional[str] = Form("none"),
     db: Session = Depends(get_db)
 ):
@@ -396,6 +398,8 @@ async def upload_asset(
             asset_type=asset_type,
             prompt=prompt,
             ratio=ratio,
+            size=size,      # 💡 存入数据库
+            model=model,    # 💡 存入数据库
             style=style
         )
     db.add(new_asset)
@@ -436,6 +440,8 @@ def get_assets(asset_type: str, user_id: int, db: Session = Depends(get_db)):
             "storage": a.storage_type,
             "prompt": a.prompt or "",
             "ratio": a.ratio or "1:1",
+            "size": a.size or "",       # 💡 补漏：吐给前端
+            "model": a.model or "",     # 💡 补漏：吐给前端
             "style": a.style or "none"
         })
 

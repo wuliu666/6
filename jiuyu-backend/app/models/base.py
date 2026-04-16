@@ -32,6 +32,8 @@ class Asset(Base):
     asset_type = Column(String(50))
     prompt = Column(String(1000), nullable=True)        # 💡 正式入库：保存提示词
     ratio = Column(String(50), nullable=True)           # 💡 正式入库：保存比例
+    size = Column(String(50), nullable=True)            # 💡 补漏：保存尺寸
+    model = Column(String(100), nullable=True)          # 💡 补漏：保存模型
     style = Column(String(50), nullable=True)           # 💡 正式入库：保存风格
     created_at = Column(DateTime, default=datetime.utcnow)
     

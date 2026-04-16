@@ -199,11 +199,14 @@ const router = useRouter()
 const reuseInspiration = (img) => {
   const reuseParams = {
     prompt: img.prompt || '',
-    ratio: img.ratio || '1:1',
-    style: img.style || 'none'
+    ratio: img.ratio || img.aspectRatio || '1:1', 
+    size: img.size || img.imageSize || '1024x1024', 
+    style: img.style || 'none',
+    model: img.model || '' 
   }
   sessionStorage.setItem('jiuyu_reuse_params', JSON.stringify(reuseParams))
-  router.push('/dashboard/drawing')
+  // 💡 核心修复：必须带上 /dashboard 父级路径，否则会白屏
+  router.push('/dashboard/drawing') 
 }
 </script>
 
