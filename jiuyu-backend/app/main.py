@@ -376,7 +376,6 @@ cos_client = CosS3Client(cos_config)
 
 
 
-@app.post("/assets/upload", tags=["素材管理"], summary="📁 智能双擎上传 (自动分拣云端/本地)")
 async def upload_asset(
     file: UploadFile = File(..., description="你要上传的图片/文件"),
     asset_type: str = Form(..., description="填 'team' (团队素材) 或 'personal' (个人私密)"),
@@ -388,9 +387,60 @@ async def upload_asset(
     style: Optional[str] = Form("none"),
     db: Session = Depends(get_db)
 ):
-    # ... 中间保存文件的逻辑保持不动 (这部分你的代码写得很好了) ...
 
-    # 💾 核心修改：大厂标准做法！图片留云端，参数进数据库，绝对并发安全！
+
+
+    """
+    核心分拣逻辑：
+    - team -> 传到腾讯云 COS
+    - personal -> 存到本地服务器 /uploads/personal/user_{id}/ 目录下
+    """
+    # 获取文件后缀名 (比如 .png, .jpg)
+    ext = file.filename.split(".")[-1]
+    # 生成一个绝对不会重复的文件名 (时间戳 + 随机码)
+    unique_name = f"{int(time.time())}_{uuid.uuid4().hex[:8]}.{ext}"
+    
+    file_url = ""
+    storage_type = ""
+
+    # 🚀 分拣通道 A：团队素材 -> 上云！
+    if asset_type == "team":
+        bucket = os.getenv("COS_BUCKET")
+        if not bucket:
+            raise HTTPException(status_code=500, detail="COS_BUCKET 未配置！")
+            
+        cos_key = f"team_assets/{unique_name}" # 在云端创建一个 team_assets 文件夹
+        
+        try:
+            # 读取文件内容并上传到腾讯云
+            contents = await file.read()
+            cos_client.put_object(Bucket=bucket, Body=contents, Key=cos_key)
+            # 拼接出你在外网能直接访问的图片链接
+            file_url = f"https://{bucket}.cos.{os.getenv('COS_REGION')}.myqcloud.com/{cos_key}"
+            storage_type = "TENCENT_COS"
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"腾讯云上传失败: {str(e)}")
+
+    # 🏠 分拣通道 B：个人素材 -> 存本地，绝对隔离！
+    elif asset_type == "personal":
+        # 建立本地专属文件夹
+        local_base_dir = "uploads/personal"
+        user_folder = f"{local_base_dir}/user_{user_id}"
+        os.makedirs(user_folder, exist_ok=True) # 如果文件夹不存在，自动创建
+        
+        local_path = f"{user_folder}/{unique_name}"
+        
+        # 把文件一块一块地写进服务器硬盘
+        with open(local_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        file_url = f"/{local_path}" # 给前端返回一个本地路径
+        storage_type = "LOCAL"
+        
+    else:
+        raise HTTPException(status_code=400, detail="asset_type 只能是 team 或 personal")
+
+     # 💾 核心修改：大厂标准做法！图片留云端，参数进数据库，绝对并发安全！
     new_asset = models.Asset(
             user_id=user_id,
             storage_type=storage_type,
@@ -406,12 +456,15 @@ async def upload_asset(
     db.commit()
 
     return {
-        "status": "success",
+        "status": "success", 
         "message": "文件上传并入库成功！",
         "storage": storage_type,
         "url": file_url
-    
     }
+
+
+
+
 
 @app.get("/assets", tags=["素材管理"], summary="🖼️ 获取历史素材列表")
 def get_assets(asset_type: str, user_id: int, db: Session = Depends(get_db)):

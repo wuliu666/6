@@ -345,8 +345,16 @@ onMounted(() => {
     try {
       const params = JSON.parse(reuseData)
       drawParams.prompt = params.prompt || ''
-      if (params.ratio) drawParams.ratio = params.ratio
       if (params.style) drawParams.style = params.style
+      
+      // ⚠️ 极其关键的第一步：先恢复“模型”，让网页的“比例下拉框”先变过来
+      if (params.model) drawParams.model = params.model
+      
+      // ⚠️ 极其关键的第二步：稍微等 50 毫秒（错峰填表），等网页准备好了，再填入比例和尺寸
+      setTimeout(() => {
+        if (params.ratio) drawParams.ratio = params.ratio
+        if (params.size) drawParams.size = params.size
+      }, 50)
       
       sessionStorage.removeItem('jiuyu_reuse_params') // 阅后即焚
       ElMessage.success('🪄 已为您还原历史灵感参数！')
