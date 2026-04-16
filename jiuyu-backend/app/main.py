@@ -376,6 +376,7 @@ cos_client = CosS3Client(cos_config)
 
 
 
+@app.post("/assets/upload", tags=["素材管理"], summary="📁 智能双擎上传 (自动分拣云端/本地)")
 async def upload_asset(
     file: UploadFile = File(..., description="你要上传的图片/文件"),
     asset_type: str = Form(..., description="填 'team' (团队素材) 或 'personal' (个人私密)"),
@@ -461,10 +462,7 @@ async def upload_asset(
         "storage": storage_type,
         "url": file_url
     }
-
-
-
-
+    
 
 @app.get("/assets", tags=["素材管理"], summary="🖼️ 获取历史素材列表")
 def get_assets(asset_type: str, user_id: int, db: Session = Depends(get_db)):
