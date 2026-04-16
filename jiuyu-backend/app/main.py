@@ -404,19 +404,34 @@ async def upload_asset(
     file_url = ""
     storage_type = ""
 
+    # 💡 绝杀技 2：先统一把图片读入内存，并瞬间提取“极小高斯模糊骨架代码”
+    contents = await file.read()
+    blur_hash_str = ""
+    try:
+        from PIL import Image
+        import io
+        import base64
+        # 将内存中的字节转为图片
+        img = Image.open(io.BytesIO(contents)).convert('RGB')
+        img.thumbnail((16, 16)) # 极限压缩到只有 16x16 像素
+        buffered = io.BytesIO()
+        img.save(buffered, format="JPEG", quality=40)
+        # 转成极短的 Base64 字符串
+        blur_hash_str = "data:image/jpeg;base64," + base64.b64encode(buffered.getvalue()).decode()
+    except Exception as e:
+        print(f"骨架代码提取失败: {e}")
+
     # 🚀 分拣通道 A：团队素材 -> 上云！
     if asset_type == "team":
         bucket = os.getenv("COS_BUCKET")
         if not bucket:
             raise HTTPException(status_code=500, detail="COS_BUCKET 未配置！")
             
-        cos_key = f"team_assets/{unique_name}" # 在云端创建一个 team_assets 文件夹
+        cos_key = f"team_assets/{unique_name}"
         
         try:
-            # 读取文件内容并上传到腾讯云
-            contents = await file.read()
+            # 💡 直接使用刚才内存里的 contents
             cos_client.put_object(Bucket=bucket, Body=contents, Key=cos_key)
-            # 拼接出你在外网能直接访问的图片链接
             file_url = f"https://{bucket}.cos.{os.getenv('COS_REGION')}.myqcloud.com/{cos_key}"
             storage_type = "TENCENT_COS"
         except Exception as e:
@@ -424,18 +439,17 @@ async def upload_asset(
 
     # 🏠 分拣通道 B：个人素材 -> 存本地，绝对隔离！
     elif asset_type == "personal":
-        # 建立本地专属文件夹
         local_base_dir = "uploads/personal"
         user_folder = f"{local_base_dir}/user_{user_id}"
-        os.makedirs(user_folder, exist_ok=True) # 如果文件夹不存在，自动创建
+        os.makedirs(user_folder, exist_ok=True) 
         
         local_path = f"{user_folder}/{unique_name}"
         
-        # 把文件一块一块地写进服务器硬盘
+        # 💡 直接把刚才内存里的 contents 写入硬盘，抛弃缓慢的 copyfileobj
         with open(local_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            buffer.write(contents)
             
-        file_url = f"/{local_path}" # 给前端返回一个本地路径
+        file_url = f"/{local_path}" 
         storage_type = "LOCAL"
         
     else:
@@ -449,9 +463,10 @@ async def upload_asset(
             asset_type=asset_type,
             prompt=prompt,
             ratio=ratio,
-            size=size,      # 💡 存入数据库
-            model=model,    # 💡 存入数据库
-            style=style
+            size=size,      
+            model=model,    
+            style=style,
+            blur_hash=blur_hash_str # 💡 这里千万别忘了存进数据库！！
         )
     db.add(new_asset)
     db.commit()
@@ -491,11 +506,11 @@ def get_assets(asset_type: str, user_id: int, db: Session = Depends(get_db)):
             "storage": a.storage_type,
             "prompt": a.prompt or "",
             "ratio": a.ratio or "1:1",
-            "size": a.size or "",       # 💡 补漏：吐给前端
-            "model": a.model or "",     # 💡 补漏：吐给前端
-            "style": a.style or "none"
+            "size": a.size or "",       
+            "model": a.model or "",     
+            "style": a.style or "none",
+            "blur_hash": a.blur_hash or ""  # 💡 绝杀技2：把骨架代码吐给前端
         })
-
     return {"status": "success", "assets": result}
 
 @app.delete("/assets/{asset_id}", tags=["素材管理"], summary="🗑️ 管理员专属：彻底粉碎素材")

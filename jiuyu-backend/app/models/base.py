@@ -33,6 +33,7 @@ class Asset(Base):
     prompt = Column(String(1000), nullable=True)        # 💡 正式入库：保存提示词
     ratio = Column(String(50), nullable=True)           # 💡 正式入库：保存比例
     size = Column(String(50), nullable=True)            # 💡 补漏：保存尺寸
+    blur_hash = Column(String(2000), nullable=True)     # 💡 绝杀技2：存放极速模糊骨架代码
     model = Column(String(100), nullable=True)          # 💡 补漏：保存模型
     style = Column(String(50), nullable=True)           # 💡 正式入库：保存风格
     created_at = Column(DateTime, default=datetime.utcnow)

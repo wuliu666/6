@@ -35,10 +35,22 @@
       
       <div v-else class="image-grid">
         <el-card v-for="(img, index) in imageList" :key="index" class="image-card" shadow="hover" :body-style="{ padding: '0px' }">
-          <el-image :src="img.url" fit="cover" class="image-preview" :preview-src-list="[img.url]" />
+          
+          <el-image :src="getThumbUrl(img)" fit="cover" class="image-preview" :preview-src-list="[img.url]" lazy>
+            <template #placeholder>
+              <div class="image-skeleton">
+                <img v-if="img.blur_hash" :src="img.blur_hash" class="blur-placeholder" />
+                <span v-else class="loading-text">光速加载中...</span>
+              </div>
+            </template>
+          </el-image>
           
           <div class="image-info">
-            <span class="image-name">素材 {{ index + 1 }}</span>
+            <el-tooltip :content="img.prompt || '外部上传，无参数'" placement="top" :show-after="500">
+              <span class="image-name" style="cursor: pointer; width: 120px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                {{ img.prompt || '未记录参数' }}
+              </span>
+            </el-tooltip>
             
             <div class="actions">
               <el-tooltip content="提取灵感参数并重画">
@@ -47,7 +59,7 @@
                 </el-button>
               </el-tooltip>
 
-              <el-button v-if="user.role === 'admin'" type="danger" size="small" circle plain @click="handleDelete(img)" style="margin-left: 5px;">
+              <el-button v-if="currentView === 'personal' || user.role === 'admin'" type="danger" size="small" circle plain @click="handleDelete(img)" style="margin-left: 5px;">
                 <el-icon><Delete /></el-icon>
               </el-button>
             </div>
@@ -273,5 +285,33 @@ const reuseInspiration = (img) => {
   font-size: 14px;
   color: #303133;
   font-weight: 500;
+}
+
+/* 💡 绝杀技 2：骨架屏专属视觉特效 */
+.image-skeleton {
+  width: 100%;
+  height: 100%;
+  background: #f5f7fa;
+  overflow: hidden;
+  position: relative;
+}
+
+.blur-placeholder {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* 魔法核心：让显卡全速运转，瞬间生成极其丝滑的高斯模糊 */
+  filter: blur(15px); 
+  /* 稍微放大一点，防止模糊后边缘缩进漏出难看的白底边框 */
+  transform: scale(1.1); 
+}
+
+.loading-text {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #909399;
+  font-size: 12px;
 }
 </style>
