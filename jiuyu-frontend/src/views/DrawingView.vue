@@ -29,7 +29,7 @@
       <div class="control-group">
         <label>画面比例与清晰度</label>
         <div style="display: flex; gap: 10px;">
-          <el-select v-model="drawParams.ratio" placeholder="画面比例">
+          <el-select v-model="drawParams.ratio" placeholder="画面比例":loading="isLoadingConfigs">
             <el-option 
               v-for="item in currentRatios" 
               :key="item.value" 
@@ -38,7 +38,7 @@
             />
           </el-select>
 
-          <el-select v-model="drawParams.size" placeholder="清晰度尺寸">
+          <el-select v-model="drawParams.size" placeholder="清晰度尺寸":loading="isLoadingConfigs">
             <el-option 
               v-for="item in currentSizes" 
               :key="item.value" 
@@ -247,6 +247,8 @@ const fetchModels = async () => {
   }
 }
 
+// 💡 优化三：新增配置加载状态，让下拉框更“稳”
+const isLoadingConfigs = ref(false) 
 const modelConfigs = ref({})
 
 // 动态计算：根据当前选择的模型，自动过滤出它支持的比例
@@ -261,16 +263,20 @@ const currentSizes = computed(() => {
   return config ? config.sizes : [{ label: '默认 1K', value: '1K' }]
 })
 
-// ==========================================
-// 💡 神仙代码：监听比例和尺寸变化，自动修正“幽灵残影”！
-// ==========================================
+// 💡 给小喇叭加一个“开机静音”开关
+const allowNotify = ref(false)
+
+// 💡 优化二：增加“贴心小喇叭”，自动修正时提醒用户
 watch(currentRatios, (newRatios) => {
   if (newRatios && newRatios.length > 0) {
-    // 检查画板当前的比例，还在不在最新的可选列表里
     const isExist = newRatios.some(r => r.value === drawParams.ratio)
     if (!isExist) {
-      // 如果不在了（比如后台没配16:9），就强制把它变成新列表里的第一个！
+      const oldVal = drawParams.ratio
       drawParams.ratio = newRatios[0].value || newRatios[0]
+      // 只有静音开关打开时，才允许弹窗！
+      if (oldVal && allowNotify.value) {
+        ElMessage.info({ message: `当前模型不支持 ${oldVal}，已自动切换为兼容比例`, duration: 2000 })
+      }
     }
   }
 }, { immediate: true })
@@ -279,21 +285,35 @@ watch(currentSizes, (newSizes) => {
   if (newSizes && newSizes.length > 0) {
     const isExist = newSizes.some(s => s.value === drawParams.size)
     if (!isExist) {
+      const oldVal = drawParams.size
       drawParams.size = newSizes[0].value || newSizes[0]
+      // 只有静音开关打开时，才允许弹窗！
+      if (oldVal && allowNotify.value) {
+        ElMessage.info({ message: `当前模型不支持 ${oldVal}，已自动匹配最佳分辨率`, duration: 2000 })
+      }
     }
   }
 }, { immediate: true })
 // ==========================================
 
-// 💡 拉取配置的函数
+// 💡 优化一：增加“长久记忆” (localStorage)，实现秒开体验
 const fetchModelConfigs = async () => {
+  // 先从保险箱看一眼有没有旧记忆，有的话先用上，不等后台
+  const saved = localStorage.getItem('jiuyu_model_configs')
+  if (saved) modelConfigs.value = JSON.parse(saved)
+
+  isLoadingConfigs.value = true
   try {
     const res = await api.get('/drawing/model-configs')
     if (res.data.status === 'success') {
       modelConfigs.value = res.data.configs
+      // 拿到最新的，赶紧更新一下保险箱里的记忆
+      localStorage.setItem('jiuyu_model_configs', JSON.stringify(res.data.configs))
     }
   } catch (error) {
     console.error('拉取模型动态配置失败', error)
+  } finally {
+    isLoadingConfigs.value = false
   }
 }
 // ==========================================
@@ -332,6 +352,11 @@ onMounted(() => {
       ElMessage.success('🪄 已为您还原历史灵感参数！')
     } catch (e) {}
   }
+
+  // 💡 核心修复：在页面数据全部初始化完毕后，延迟 1 秒再把小喇叭的“静音”取消掉
+  setTimeout(() => {
+    allowNotify.value = true
+  }, 1000)
 })
 
 const handleGenerate = async () => {
@@ -394,10 +419,11 @@ const saveToAssets = async () => {
         url: reader.result, // 图片转 Base64 存在本地
         prompt: drawParams.prompt,
         ratio: drawParams.ratio,
+        size: drawParams.size,       // 💡 补上遗漏的尺寸
+        model: drawParams.model,     // 💡 补上遗漏的模型
         style: drawParams.style,
         created_at: Date.now()
       }
-      
       // 调用文件上方你已经写好的 saveToLocalDB
       await saveToLocalDB(assetObj)
       ElMessage.success('🎉 个人素材已存入本地浏览器，服务器 0 占用！')
@@ -433,6 +459,8 @@ const saveToTeamAssets = async () => {
     // 💡 将画板当前的参数一同打包发给后端
     formData.append('prompt', drawParams.prompt)
     formData.append('ratio', drawParams.ratio)
+    formData.append('size', drawParams.size)      // 💡 补上遗漏的尺寸
+    formData.append('model', drawParams.model)    // 💡 补上遗漏的模型
     formData.append('style', drawParams.style)
     // 💡 新增：把当前画板的参数一起发给后端，后端会将它转存到 COS
     const userStr = localStorage.getItem('jiuyu_user')
