@@ -725,31 +725,63 @@ def create_channel_folder(req: ChannelFolderRequest, db: Session = Depends(get_d
     db.commit()
     return {"status": "success"}
 
+# 💡 新增：删除文件夹及级联保护
+@app.delete("/admin/folders/{folder_name}", tags=["管理端"])
+def delete_channel_folder(folder_name: str, db: Session = Depends(get_db)):
+    if folder_name == "未分类":
+        raise HTTPException(status_code=400, detail="系统保留核心池，禁止删除！")
+    
+    folder = db.query(models.ImageChannelFolder).filter(models.ImageChannelFolder.name == folder_name).first()
+    if not folder:
+        raise HTTPException(status_code=404, detail="找不到该渠道文件夹！")
+    
+    # 安全降级：把被删除文件夹里的模型，全部踢回“未分类”暂存池，防止数据蒸发
+    db.query(models.ModelConfig).filter(models.ModelConfig.channel_name == folder_name).update({"channel_name": "未分类"})
+    
+    db.delete(folder)
+    db.commit()
+    return {"status": "success", "message": f"渠道【{folder_name}】已解散，内部模型已撤回暂存池。"}
+
 @app.get("/admin/all-models", tags=["管理端"])
 def get_all_models_for_admin(db: Session = Depends(get_db)):
     return {"status": "success", "models": db.query(models.ModelConfig).all()}
 
+class SyncRequest(BaseModel):
+    channel_name: str # 告诉后端，我要拉取哪个渠道的数据
+
 @app.post("/admin/sync-newapi", tags=["管理端"])
-def sync_newapi(db: Session = Depends(get_db)):
-    # 💡 使用全局环境里的管理员总钥匙去 NewAPI 进货
-    base_url = os.getenv("AI_BASE_URL", "http://127.0.0.1:3000/v1").replace("/v1", "")
-    api_key = os.getenv("AI_API_KEY", "")
+def sync_newapi(req: SyncRequest, db: Session = Depends(get_db)):
+    # 💡 核心改造：精准打击！根据当前选中的文件夹去拿对应的钥匙
+    if req.channel_name == "未分类":
+        # 如果停留在未分类，就用全局环境变量里的兜底配置
+        base_url = os.getenv("AI_BASE_URL", "http://127.0.0.1:3000/v1").replace("/v1", "")
+        api_key = os.getenv("AI_API_KEY", "")
+    else:
+        # 如果选了具体文件夹，就用这个文件夹专属的配置
+        folder = db.query(models.ImageChannelFolder).filter(models.ImageChannelFolder.name == req.channel_name).first()
+        if not folder or not folder.base_url or not folder.api_key:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail=f"渠道【{req.channel_name}】缺少 URL 或 Key，请先配置！")
+        base_url = folder.base_url.replace("/v1", "")
+        api_key = folder.api_key
+
     try:
         res = requests.get(f"{base_url}/v1/models", headers={"Authorization": f"Bearer {api_key}"}, timeout=10)
         res.raise_for_status()
         newapi_models = [m["id"] for m in res.json().get("data", [])]
 
-        local_models = db.query(models.ModelConfig).all()
+        # 💡 只查当前渠道里的模型，避免把其他渠道的模型误判为丢失
+        local_models = db.query(models.ModelConfig).filter(models.ModelConfig.channel_name == req.channel_name).all()
         local_names = {m.model_name for m in local_models}
 
         new_count, lost_count = 0, 0
-        # 1. 发现新模型，扔进未分类暂存池
+        # 1. 发现新模型，直接精准扔进当前渠道！
         for name in newapi_models:
             if name not in local_names:
-                db.add(models.ModelConfig(model_name=name, channel_name="未分类", api_protocol="standard_openai", is_image_model=True))
+                db.add(models.ModelConfig(model_name=name, channel_name=req.channel_name, api_protocol="standard_openai", is_image_model=True))
                 new_count += 1
                 
-        # 2. 检查本地模型是否在 NewAPI 丢失
+        # 2. 检查本地模型是否在该渠道丢失
         for m in local_models:
             if m.model_name not in newapi_models and not m.is_lost:
                 m.is_lost = True
@@ -760,7 +792,8 @@ def sync_newapi(db: Session = Depends(get_db)):
         db.commit()
         return {"status": "success", "new_count": new_count, "lost_count": lost_count}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=f"连接 {req.channel_name} 失败: {str(e)}")
 
 
 

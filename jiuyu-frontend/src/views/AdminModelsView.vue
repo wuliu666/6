@@ -3,7 +3,7 @@
     <div class="w-64 bg-white p-4 rounded shadow-sm border">
       <div class="flex justify-between items-center mb-4">
         <h3 class="font-bold text-gray-700">API 渠道文件夹</h3>
-        <el-button size="small" type="primary" @click="showChannelDialog = true" circle icon="Plus" />
+        <el-button size="small" type="primary" @click="openNewChannelDialog" circle icon="Plus" />
       </div>
       <el-menu :default-active="activeChannel" @select="activeChannel = $event" class="border-none">
         <el-menu-item index="未分类">
@@ -21,11 +21,15 @@
       <div class="flex justify-between items-center mb-4">
         <div class="flex items-center gap-4">
           <h2 class="text-xl font-bold m-0">【{{ activeChannel }}】内容分拣</h2>
+          <template v-if="activeChannel !== '未分类'">
+            <el-button size="small" type="primary" link icon="Edit" @click="editCurrentChannel">配置密钥</el-button>
+            <el-button size="small" type="danger" link icon="Delete" @click="deleteCurrentChannel">解散渠道</el-button>
+          </template>
           <el-input v-model="searchQuery" placeholder="搜模型..." style="width: 200px" prefix-icon="Search" clearable />
         </div>
         <div class="flex gap-2">
           <el-button type="danger" plain size="small" @click="handleCleanLost" icon="Delete">清理失效</el-button>
-          <el-button type="success" :loading="isSyncing" @click="handleSync" icon="Refresh">一键进货</el-button>
+          <el-button type="success" :loading="isSyncing" @click="handleSync" icon="Refresh">针对此渠道进货</el-button>
         </div>
       </div>
 
@@ -65,6 +69,24 @@
         </el-table-column>
       </el-table>
     </div>
+
+    <el-dialog v-model="showChannelDialog" :title="channelForm.isEdit ? '修改渠道配置' : '新建 API 渠道'" width="500px">
+      <el-form :model="channelForm" label-position="top">
+        <el-form-item label="渠道名称 (文件夹名)">
+          <el-input v-model="channelForm.name" :disabled="channelForm.isEdit" placeholder="例如：某某中转站" />
+        </el-form-item>
+        <el-form-item label="Base URL (中转地址)">
+          <el-input v-model="channelForm.base_url" placeholder="https://api.example.com/v1" />
+        </el-form-item>
+        <el-form-item label="API Key (通讯令牌)">
+          <el-input v-model="channelForm.api_key" placeholder="sk-..." type="password" show-password />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showChannelDialog = false">取消</el-button>
+        <el-button type="primary" @click="saveChannel">保存设置</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="showModelDialog" :title="'配置模型: ' + modelForm.model_name" width="550px">
       <el-form :model="modelForm" label-position="top">
@@ -141,6 +163,8 @@ const isSyncing = ref(false)
 const showChannelDialog = ref(false)
 const showModelDialog = ref(false)
 
+// 💡 增加了渠道表单的数据结构
+const channelForm = ref({ name: '', base_url: '', api_key: '', isEdit: false })
 const modelForm = ref({ id: null, model_name: '', channel_name: '', api_protocol: 'standard_openai', supported_ratios: [], supported_sizes: [] })
 
 // 💡 联动逻辑
@@ -150,12 +174,46 @@ const filteredModels = computed(() => {
   if (searchQuery.value) list = list.filter(m => m.model_name.toLowerCase().includes(searchQuery.value.toLowerCase()))
   return list
 })
-const pagedModels = computed(() => filteredModels.value) // 后续可加分页逻辑
+const pagedModels = computed(() => filteredModels.value) 
 
 const fetchData = async () => {
   const [cRes, mRes] = await Promise.all([api.get('/admin/folders'), api.get('/admin/all-models')])
   channels.value = cRes.data.folders
   allModels.value = mRes.data.models
+}
+
+// 💡 新增：打开新建渠道弹窗
+const openNewChannelDialog = () => {
+  channelForm.value = { name: '', base_url: '', api_key: '', isEdit: false }
+  showChannelDialog.value = true
+}
+
+// 💡 新增：编辑当前正在查看的渠道配置
+const editCurrentChannel = () => {
+  const current = channels.value.find(c => c.name === activeChannel.value)
+  if (current) {
+    channelForm.value = { ...current, isEdit: true }
+    showChannelDialog.value = true
+  }
+}
+
+// 💡 新增：保存渠道到后端
+const saveChannel = async () => {
+  if (!channelForm.value.name) return ElMessage.warning('渠道名称不能为空')
+  await api.post('/admin/folders', channelForm.value)
+  ElMessage.success('渠道配置保存成功！')
+  showChannelDialog.value = false
+  fetchData()
+}
+
+// 💡 新增：删除当前渠道（解散文件夹）
+const deleteCurrentChannel = () => {
+  ElMessageBox.confirm('确定解散该渠道吗？内部模型将退回未分类暂存池，不会丢失。', '解散警告', { type: 'warning' }).then(async () => {
+    await api.delete(`/admin/folders/${activeChannel.value}`)
+    ElMessage.success('渠道已解散！')
+    activeChannel.value = '未分类'
+    fetchData()
+  })
 }
 
 // 💡 批量处理逻辑
@@ -181,7 +239,6 @@ const handleCleanLost = async () => {
 }
 
 const editModel = (row) => {
-  // 💡 找回丢失的格式化逻辑
   const ratios = typeof row.supported_ratios === 'string' ? JSON.parse(row.supported_ratios) : row.supported_ratios
   const sizes = typeof row.supported_sizes === 'string' ? JSON.parse(row.supported_sizes) : row.supported_sizes
   modelForm.value = { ...row, supported_ratios: ratios || [], supported_sizes: sizes || [] }
@@ -198,10 +255,15 @@ const saveModel = async () => {
 
 const handleSync = async () => {
   isSyncing.value = true
-  const res = await api.post('/admin/sync-newapi')
-  ElMessage.success(`进货成功：新增 ${res.data.new_count} 个`)
-  fetchData()
-  isSyncing.value = false
+  try {
+    const res = await api.post('/admin/sync-newapi', { channel_name: activeChannel.value })
+    ElMessage.success(`定向进货成功：新增 ${res.data.new_count} 个`)
+    fetchData()
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '进货失败，请检查该渠道的 URL 和 Key')
+  } finally {
+    isSyncing.value = false
+  }
 }
 
 const deleteSingle = (id) => {
