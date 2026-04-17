@@ -66,6 +66,7 @@ class DrawRequest(BaseModel):
     imageSize: Optional[str] = "1K"
     style: Optional[str] = "none"
     urls: Optional[List[str]] = []
+    
 # =========================================================
 # 📦 管理员模型配置的接收数据包
 # =========================================================
@@ -559,21 +560,26 @@ async def generate_image(request: DrawRequest, current_user: str = Depends(get_c
     
     try:
         # ==========================================
-        # 👑 核心架构：去数据库查阅【模型分发配置】
+        # 👑 核心架构：百分百信任数据库，绝不靠名字瞎猜
         # ==========================================
-        # 如果数据库里有这个模型，按数据库配的协议走；没有配置的话，默认当它是标准模型
+        # 去数据库查阅这个模型的完整档案
         model_config = db.query(models.ModelConfig).filter(models.ModelConfig.model_name == request.model).first()
-        protocol = model_config.api_protocol if model_config else "standard_openai"
         
-        # 💡 特殊硬核兼容：如果还没配置，但名字里带 nano，强制分发给 nano 翻译官（防止你重建数据库时忘配）
-        if "nano" in request.model.lower():
-            protocol = "grsai_nano"
+        # 1. 严格获取协议（如果没有在数据库档案里，默认它是一个符合标准 OpenAI 协议的模型）
+        protocol = model_config.api_protocol if model_config else "standard_openai"
 
-        # 🏢 翻译官注册表：根据协议，分发给不同的适配器
+        # 2. 🏢 翻译官注册表：只认协议，不认名字！
         ADAPTER_REGISTRY = {
             "standard_openai": OpenAIAdapter(),
             "grsai_nano": NanoAdapter()
+            # 💡 以后如果遇到必须轮询的奇葩 Nano，直接加一行: "polling_nano": PollingNanoAdapter()
         }
+
+        adapter = ADAPTER_REGISTRY.get(protocol)
+        if not adapter:
+            raise HTTPException(status_code=500, detail=f"系统缺少协议为 [{protocol}] 的翻译插件！")
+
+        print(f"⚡ 正在通过【{adapter.__class__.__name__}】处理 [{request.model}] 的生图请求 (协议: {protocol})...")
 
         adapter = ADAPTER_REGISTRY.get(protocol)
         if not adapter:

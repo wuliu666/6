@@ -58,7 +58,7 @@ class ModelConfig(Base):
     __tablename__ = "model_configs"
     
     id = Column(Integer, primary_key=True, index=True)
-    model_name = Column(String(100), unique=True, index=True, nullable=False) 
+    model_name = Column(String(100), index=True, nullable=False)
     provider = Column(String(50), default="default") 
     is_image_model = Column(Boolean, default=False)  
     
