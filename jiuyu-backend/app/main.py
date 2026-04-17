@@ -15,6 +15,9 @@ from openai import AsyncOpenAI
 import re
 from typing import List, Optional, Dict
 import requests
+# 💡 引入我们的翻译官部门
+from app.adapters.openai_adapter import OpenAIAdapter
+from app.adapters.nano_adapter import NanoAdapter
 
 # 引入腾讯云 COS SDK
 from qcloud_cos import CosConfig
@@ -551,107 +554,35 @@ def delete_asset(
     
     
 
-@app.post("/drawing/generate", tags=["AI 创作"], summary="🚀 智能双引擎：标准走网关，Nano 走直连")
-async def generate_image(request: DrawRequest, current_user: str = Depends(get_current_user)):
-    # 1. 提示词增强逻辑
-    final_prompt = request.prompt
-    if request.style != "none":
-        final_prompt = f"3D render, octane render, unreal engine 5, ray tracing, cinematic lighting, high detail, {request.prompt}"
-
-    model_name = request.model.lower()
-
-# ==========================================
-    # 👑 核心架构：【特种模型精准路由表】
-    # ==========================================
-    special_routes = {
-        "nano-banana-2": {
-            # 🚨 绝杀修复 1：强行补齐 /v1 路径，完美对齐服务器！
-            "direct_url": f"{os.getenv('GRSAI_DIRECT_URL', 'https://grsai.dakka.com.cn').rstrip('/')}/v1/draw/nano-banana",
-            "key": os.getenv('GRSAI_DIRECT_KEY'),
-            "payload_format": "grsai_nano"
-        }
-    }
-
+@app.post("/drawing/generate", tags=["AI 创作"], summary="🚀 智能双引擎：路由表分发")
+async def generate_image(request: DrawRequest, current_user: str = Depends(get_current_user), db: Session = Depends(get_db)):
+    
     try:
-        # 🔍 查表：判断是否命中特种部队名单
-        if model_name in special_routes:
-            route_config = special_routes[model_name]
-            print(f"⚡ 命中特种路由表：{model_name}，正在执行【底层直连】...")
-            
-            headers = {
-                "Authorization": f"Bearer {route_config['key']}",
-                "Content-Type": "application/json"
-            }
-            
-            # 💡 核心修复：将前端传来的真实参数完美映射给 Grsai
-            if route_config['payload_format'] == "grsai_nano":
-                payload = {
-                    "model": request.model,
-                    "prompt": final_prompt,
-                    "urls": request.urls,           # 👉 接收前端传来的 Base64 数组
-                    "aspectRatio": request.aspectRatio,   # 👉 接收前端选择的比例
-                    "imageSize": request.imageSize  # 👉 接收前端选择的分辨率
-                }
-            else:
-                payload = {"prompt": final_prompt}
+        # ==========================================
+        # 👑 核心架构：去数据库查阅【模型分发配置】
+        # ==========================================
+        # 如果数据库里有这个模型，按数据库配的协议走；没有配置的话，默认当它是标准模型
+        model_config = db.query(models.ModelConfig).filter(models.ModelConfig.model_name == request.model).first()
+        protocol = model_config.api_protocol if model_config else "standard_openai"
+        
+        # 💡 特殊硬核兼容：如果还没配置，但名字里带 nano，强制分发给 nano 翻译官（防止你重建数据库时忘配）
+        if "nano" in request.model.lower():
+            protocol = "grsai_nano"
 
-            # 发起直连并手工解析 SSE 流式返回
-            async with httpx.AsyncClient(timeout=300.0, verify=False) as client:
-                res = await client.post(route_config['direct_url'], json=payload, headers=headers)
-                raw_text = res.text
-                image_url = None
-                import json
-                
-                for line in raw_text.splitlines():
-                    line = line.strip()
-                    if line.startswith("data:"):
-                        json_str = line[5:].strip()
-                        if not json_str or json_str == "[DONE]":
-                            continue
-                        try:
-                            data_obj = json.loads(json_str)
-                            
-                            # 🚨 核心修复 1：适配 Grsai 的 "succeeded" 状态
-                            current_status = data_obj.get("status")
-                            if current_status == "succeeded" or current_status == "success":
-                                
-                                # 🚨 核心修复 2：从 results 数组中去抠图
-                                results_list = data_obj.get("results")
-                                if results_list and isinstance(results_list, list) and len(results_list) > 0:
-                                    image_url = results_list[0].get("url")
-                                else:
-                                    # 如果以后格式又变了，留个兜底
-                                    image_url = data_obj.get("url") or data_obj.get("image_url")
-                                
-                                if image_url:
-                                    break # 成功拿到链接，立刻跑路！
-                        except Exception:
-                            continue
-                            
-                if not image_url:
-                    raise Exception(f"未能提取到链接，原始返回: {raw_text[:200]}")
+        # 🏢 翻译官注册表：根据协议，分发给不同的适配器
+        ADAPTER_REGISTRY = {
+            "standard_openai": OpenAIAdapter(),
+            "grsai_nano": NanoAdapter()
+        }
 
-        else:
-            # ==========================================
-            # 🌟 方案 A：标准模型走 New API
-            # ==========================================
-            print(f"📡 标准模型: {request.model}，通过网关分发...")
-            
-            # 🌟 方案：利用 extra_body 将专属参数强行注入给 grsai 网关
-            response = await ai_client.images.generate(
-                model=request.model,
-                prompt=final_prompt,
-                # OpenAI SDK 原生要求提供 size，随便填一个骗过本地校验即可，网关以 extra_body 里的参数为准
-                size="1024x1024", 
-                extra_body={
-                    "aspectRatio": request.aspectRatio,
-                    "imageSize": request.imageSize,
-                    "urls": request.urls,
-                    "webhook": request.webhook,
-                    "shutProgress": request.shutProgress
-                }
-            )
-            image_url = response.data[0].url
+        adapter = ADAPTER_REGISTRY.get(protocol)
+        if not adapter:
+            raise HTTPException(status_code=500, detail=f"系统缺少协议为 [{protocol}] 的翻译插件！")
+
+        print(f"⚡ 正在通过【{adapter.__class__.__name__}】处理 {request.model} 的生图请求...")
+        
+        # 🚀 一键呼叫翻译官干活！主程序完全不管里面是怎么处理的
+        image_url = await adapter.generate_image(request, model_config)
 
         return {"status": "success", "image_url": image_url}
 

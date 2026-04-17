@@ -58,10 +58,12 @@ class ModelConfig(Base):
     __tablename__ = "model_configs"
     
     id = Column(Integer, primary_key=True, index=True)
-    model_name = Column(String(100), unique=True, index=True, nullable=False) # 模型名称，如 nano-banana-2
-    provider = Column(String(50), default="default") # 供应商，如 grsai
-    is_image_model = Column(Boolean, default=False)  # 开关：True为绘图模型，False为对话模型
+    model_name = Column(String(100), unique=True, index=True, nullable=False) 
+    provider = Column(String(50), default="default") 
+    is_image_model = Column(Boolean, default=False)  
     
-    # 使用 JSON 字段直接存储下拉框配置！完美解决写死代码的问题！
+    # 💡 核心升级：增加“接口协议”字段，用来决定这台模型分配给哪个翻译官！
+    api_protocol = Column(String(50), default="standard_openai") 
+    
     supported_ratios = Column(JSON, default=list) 
     supported_sizes = Column(JSON, default=list)
