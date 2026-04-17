@@ -62,6 +62,7 @@ ai_client = AsyncOpenAI(
 class DrawRequest(BaseModel):
     prompt: str
     model: str
+    provider: str = "default"  # 👈 新增：明确发往哪个渠道
     aspectRatio: Optional[str] = "1:1"
     imageSize: Optional[str] = "1K"
     style: Optional[str] = "none"
@@ -71,10 +72,11 @@ class DrawRequest(BaseModel):
 # 📦 管理员模型配置的接收数据包
 # =========================================================
 class ConfigUpdateRequest(BaseModel):
-    # 💡 告诉 Pydantic：别管我用 model_ 开头的变量名，闭嘴
     model_config = {"protected_namespaces": ()} 
     
     model_name: str
+    provider: str = "default"             # 👈 新增：渠道商
+    api_protocol: str = "standard_openai" # 👈 新增：翻译官协议
     is_image_model: bool
     supported_ratios: List[Dict[str, str]]
     supported_sizes: List[Dict[str, str]]
@@ -560,10 +562,12 @@ async def generate_image(request: DrawRequest, current_user: str = Depends(get_c
     
     try:
         # ==========================================
-        # 👑 核心架构：百分百信任数据库，绝不靠名字瞎猜
+        # 👑 核心架构：双重定位（模型名字 + 渠道），绝对不会撞名
         # ==========================================
-        # 去数据库查阅这个模型的完整档案
-        model_config = db.query(models.ModelConfig).filter(models.ModelConfig.model_name == request.model).first()
+        model_config = db.query(models.ModelConfig).filter(
+            models.ModelConfig.model_name == request.model,
+            models.ModelConfig.provider == request.provider
+        ).first()
         
         # 1. 严格获取协议（如果没有在数据库档案里，默认它是一个符合标准 OpenAI 协议的模型）
         protocol = model_config.api_protocol if model_config else "standard_openai"
@@ -604,15 +608,19 @@ async def generate_image(request: DrawRequest, current_user: str = Depends(get_c
 # --- 1. 写接口：管理员保存/更新模型配置 ---
 @app.post("/admin/model-configs/update")
 async def update_model_config(req: ConfigUpdateRequest, db: Session = Depends(get_db)):
-    # 查找数据库中是否已有该模型的配置
-    config_record = db.query(models.ModelConfig).filter(models.ModelConfig.model_name == req.model_name).first()
+    # 💡 核心：按 模型名 + 渠道名 联合查找
+    config_record = db.query(models.ModelConfig).filter(
+        models.ModelConfig.model_name == req.model_name,
+        models.ModelConfig.provider == req.provider
+    ).first()
     
     if not config_record:
-        # 如果没有，就新建一条记录
-        config_record = models.ModelConfig(model_name=req.model_name)
+        # 如果没有，就新建一条记录，并存入渠道名
+        config_record = models.ModelConfig(model_name=req.model_name, provider=req.provider)
         db.add(config_record)
         
-    # 覆盖更新为管理员在网页上配好的参数（直接把 JSON 列表塞进数据库）
+    # 覆盖更新为管理员在网页上配好的参数
+    config_record.api_protocol = req.api_protocol # 👈 写入翻译官协议
     config_record.is_image_model = req.is_image_model
     config_record.supported_ratios = req.supported_ratios
     config_record.supported_sizes = req.supported_sizes
@@ -621,18 +629,12 @@ async def update_model_config(req: ConfigUpdateRequest, db: Session = Depends(ge
     return {"status": "success", "message": f"🎉 模型 [{req.model_name}] 配置已成功同步至全站！"}
 
 
-# ⚙️ 模型能力注册表 (全站动态 Config-Driven 中心)
-# =========================================================
 @app.get("/drawing/model-configs")
 def get_dynamic_model_configs(db: Session = Depends(get_db)):
     import json
-    
-    # 💡 核心改变：不再用假数据，直接去数据库里把你刚才配置的抽屉全拉出来！
     db_configs = db.query(models.ModelConfig).all()
-    
     result_configs = {}
     for config in db_configs:
-        # 因为存入数据库时可能被转成了字符串，这里安全地解析成数组
         try:
             ratios = json.loads(config.supported_ratios) if isinstance(config.supported_ratios, str) else config.supported_ratios
             sizes = json.loads(config.supported_sizes) if isinstance(config.supported_sizes, str) else config.supported_sizes
@@ -640,63 +642,27 @@ def get_dynamic_model_configs(db: Session = Depends(get_db)):
             ratios = config.supported_ratios
             sizes = config.supported_sizes
             
-        result_configs[config.model_name] = {
+        # 💡 核心：Key必须是 "渠道::模型" 防覆盖
+        unique_key = f"{config.provider}::{config.model_name}"
+        result_configs[unique_key] = {
             "is_image_model": config.is_image_model,
             "ratios": ratios,
             "sizes": sizes
         }
-        
     return {"status": "success", "configs": result_configs}
 
 @app.get("/drawing/models", tags=["AI 创作"], summary="🔍 动态获取可用模型列表")
-async def get_available_models():
-    import requests
-    import os
-    import json
-    
-    # 严谨清理 URL
-    base_url = os.getenv("AI_BASE_URL", "").strip().rstrip("/")
-    base_url = base_url.replace("/api", "").replace("/v1", "")
-    
-    api_key = os.getenv("AI_API_KEY", "").strip()
-    url = f"{base_url}/v1/models"
-    
-    print(f"\n=====================================")
-    print(f"🔗 正在请求画板模型: {url}")
-    print(f"🔑 使用密钥: {api_key[:10]}......")
-    
-    try:
-        headers = {"Authorization": f"Bearer {api_key}"}
-        # 发送请求，允许跳转，看看它到底要把我们带到哪个网页
-        resp = requests.get(url, headers=headers, timeout=10)
-        
-        raw_text = resp.text.strip()
-        
-        print(f"📄 网关状态码: {resp.status_code}")
-        print(f"📄 网关扔回来的网页内容 (前200字): \n{raw_text[:200]}")
-        print(f"=====================================\n")
-        
-        # 🛡️ 如果网关返回的是网页
-        if raw_text.startswith("<"):
-            # 💡 关键修改：不再抛出异常，而是把错误当作一个“假模型”返回给前端显示！
-            return {"status": "success", "models": [f"⚠️ 拦截: 网关返回了网页 (HTTP {resp.status_code})"]}
+async def get_available_models(db: Session = Depends(get_db)):
+    # 💡 核心升级：不再去外网网关拉数据，直接从数据库读取我们配置好的“渠道+模型”
+    configs = db.query(models.ModelConfig).filter(models.ModelConfig.is_image_model == True).all()
+    grouped_models = {}
+    for c in configs:
+        if c.provider not in grouped_models:
+            grouped_models[c.provider] = []
+        if c.model_name not in grouped_models[c.provider]:
+            grouped_models[c.provider].append(c.model_name)
             
-        data = json.loads(raw_text)
-        
-        # ✅ 成功解析，提取模型
-        if "data" in data:
-            model_names = [m.get("id") for m in data.get("data", [])]
-            return {"status": "success", "models": model_names}
-        elif "error" in data:
-            err_msg = data["error"].get("message", "未知错误")
-            return {"status": "success", "models": [f"⚠️ 密钥错误: {err_msg}"]}
-        else:
-            return {"status": "success", "models": ["⚠️ 返回了未知的 JSON 结构"]}
-            
-    except Exception as e:
-        print(f"❌ 画板拉取模型异常: {str(e)}")
-        # 即使断网，也不报500，优雅地告诉前端
-        return {"status": "success", "models": [f"⚠️ 请求断开: {str(e)}"]}
+    return {"status": "success", "models": grouped_models}
     
 # =========================================================
 # 📡 管理后台：NewAPI 模型极速抓取通道 (防弹容错版)

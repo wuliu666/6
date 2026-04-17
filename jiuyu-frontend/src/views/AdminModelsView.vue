@@ -7,7 +7,11 @@
 
     <div class="config-card">
       <el-form label-position="top">
-        <el-form-item label="1. 选择或输入模型标识 (Model ID)">
+        <el-form-item label="1. API 渠道 (Provider)">
+          <el-input v-model="currentConfig.provider" placeholder="例如: GRS_Main, API_Proxy" class="full-width" />
+        </el-form-item>
+
+        <el-form-item label="2. 选择或输入模型标识 (Model ID)">
           <el-select
             v-model="currentConfig.model_name"
             filterable
@@ -26,7 +30,14 @@
           <div class="form-tip">提示：您可以直接从下拉框选择网关已有的模型，也可以手动输入新模型名。</div>
         </el-form-item>
 
-        <el-form-item label="2. 标记模型属性">
+        <el-form-item label="3. 底层通讯协议 (Protocol)">
+          <el-select v-model="currentConfig.api_protocol" style="width: 100%">
+            <el-option label="✅ 标准 OpenAI 网关" value="standard_openai" />
+            <el-option label="⚠️ 特殊 Nano 直连" value="grsai_nano" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="4. 标记模型属性">
           <el-radio-group v-model="currentConfig.is_image_model" size="large">
             <el-radio-button :label="false">💬 对话模型</el-radio-button>
             <el-radio-button :label="true">🎨 绘图模型</el-radio-button>
@@ -112,6 +123,8 @@ const savedConfigs = ref({})
 
 const currentConfig = ref({
   model_name: '',
+  provider: 'default_api',
+  api_protocol: 'standard_openai',
   is_image_model: true
 })
 
@@ -175,6 +188,8 @@ const saveConfig = async () => {
   // 💡 修复点 4：给后端发送请求前，悄悄把纯字符串还原成复杂的完整对象
   const payload = {
     model_name: currentConfig.value.model_name,
+    provider: currentConfig.value.provider,
+    api_protocol: currentConfig.value.api_protocol,
     is_image_model: currentConfig.value.is_image_model,
     supported_ratios: selectedRatios.value.map(val => predefinedRatios.find(p => p.value === val)),
     supported_sizes: selectedSizes.value.map(val => predefinedSizes.find(p => p.value === val))

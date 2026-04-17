@@ -15,14 +15,16 @@
       </div>
 
       <div class="control-group">
-        <label>核心绘画引擎 <el-tag size="small" type="success" v-if="availableModels.length > 0">已连通网关</el-tag></label>
-        <el-select v-model="drawParams.model" placeholder="正在加载模型..." style="width: 100%" :loading="isLoadingModels">
-          <el-option 
-            v-for="modelName in availableModels" 
-            :key="modelName" 
-            :label="modelName" 
-            :value="modelName" 
-          />
+        <label>1. API 渠道 <el-tag size="small" type="success" v-if="Object.keys(groupedModels).length > 0">已连通</el-tag></label>
+        <el-select v-model="drawParams.provider" placeholder="请先选择渠道" @change="handleProviderChange" style="width: 100%" :loading="isLoadingModels">
+          <el-option v-for="key in Object.keys(groupedModels)" :key="key" :label="key" :value="key" />
+        </el-select>
+      </div>
+
+      <div class="control-group">
+        <label>2. 核心绘画引擎</label>
+        <el-select v-model="drawParams.model" placeholder="请选择具体模型" style="width: 100%" :disabled="!drawParams.provider">
+          <el-option v-for="m in currentChannelModels" :key="m" :label="m" :value="m" />
         </el-select>
       </div>
 
@@ -148,6 +150,7 @@ const drawParams = reactive({
   size: '2K',
   style: 'none',
   model: '',
+  provider: '', // 👈 新增渠道字段
   referenceImages: [] 
 })
 
@@ -168,8 +171,20 @@ const submitDraw = async () => {
 
 const isGenerating = ref(false)
 const isLoadingModels = ref(false) 
-const availableModels = ref([])    
-const currentImage = ref('')      
+const groupedModels = ref({}) // 👈 替换：存放渠道分组
+const currentImage = ref('')  
+
+// 💡 联动逻辑
+const currentChannelModels = computed(() => {
+  return groupedModels.value[drawParams.provider] || []
+})
+
+const handleProviderChange = () => {
+  drawParams.model = ''
+  if (currentChannelModels.value.length > 0) {
+    drawParams.model = currentChannelModels.value[0]
+  }
+}    
 const userRole = ref('user') // 💡 新增：记录当前用户的角色权限 
 
 // ==========================================
@@ -232,9 +247,11 @@ const fetchModels = async () => {
   try {
     const response = await api.get('/drawing/models')
     if (response.data.status === 'success') {
-      availableModels.value = response.data.models
-      if (availableModels.value.length > 0) {
-        drawParams.model = availableModels.value[0]
+      groupedModels.value = response.data.models
+      const providers = Object.keys(groupedModels.value)
+      if (providers.length > 0) {
+        drawParams.provider = providers[0]
+        drawParams.model = groupedModels.value[providers[0]][0] || ''
       }
     }
   } catch (error) {
@@ -251,15 +268,16 @@ const fetchModels = async () => {
 const isLoadingConfigs = ref(false) 
 const modelConfigs = ref({})
 
-// 动态计算：根据当前选择的模型，自动过滤出它支持的比例
+// 动态计算：双重 Key 防止串台
 const currentRatios = computed(() => {
-  const config = modelConfigs.value[drawParams.model]
+  const uniqueKey = `${drawParams.provider}::${drawParams.model}`
+  const config = modelConfigs.value[uniqueKey]
   return config ? config.ratios : [{ label: '默认 1:1', value: '1:1' }] 
 })
 
-// 动态计算：根据当前选择的模型，自动过滤出它支持的清晰度
 const currentSizes = computed(() => {
-  const config = modelConfigs.value[drawParams.model]
+  const uniqueKey = `${drawParams.provider}::${drawParams.model}`
+  const config = modelConfigs.value[uniqueKey]
   return config ? config.sizes : [{ label: '默认 1K', value: '1K' }]
 })
 
@@ -385,6 +403,7 @@ const handleGenerate = async () => {
     const response = await api.post('/drawing/generate', {
       prompt: drawParams.prompt,
       model: drawParams.model,
+      provider: drawParams.provider, // 👈 发送渠道标识
       aspectRatio: drawParams.ratio,
       imageSize: drawParams.size,
       style: drawParams.style,
