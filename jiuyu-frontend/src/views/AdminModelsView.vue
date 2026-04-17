@@ -1,9 +1,11 @@
 <template>
   <div class="flex h-full bg-gray-50 p-4 gap-4" style="min-height: 85vh;">
-    <div class="w-64 bg-white p-4 rounded shadow-sm border">
-      <div class="flex justify-between items-center mb-4">
-        <h3 class="font-bold text-gray-700">API 渠道文件夹</h3>
-        <el-button size="small" type="primary" @click="openNewChannelDialog" circle icon="Plus" />
+    <div class="w-72 bg-white p-5 rounded-lg shadow-sm border-r">
+      <div class="flex justify-between items-center mb-6 pb-2 border-b">
+        <h3 class="text-sm font-bold text-gray-500 uppercase tracking-wider">API 渠道管理</h3>
+        <el-tooltip content="新建文件夹" placement="top">
+          <el-button size="small" type="primary" @click="openNewChannelDialog" circle icon="Plus" />
+        </el-tooltip>
       </div>
       <el-menu :default-active="activeChannel" @select="activeChannel = $event" class="border-none">
         <el-menu-item index="未分类">
@@ -17,19 +19,29 @@
       </el-menu>
     </div>
 
-    <div class="flex-1 bg-white p-6 rounded shadow-sm border relative">
-      <div class="flex justify-between items-center mb-4">
-        <div class="flex items-center gap-4">
-          <h2 class="text-xl font-bold m-0">【{{ activeChannel }}】内容分拣</h2>
-          <template v-if="activeChannel !== '未分类'">
-            <el-button size="small" type="primary" link icon="Edit" @click="editCurrentChannel">配置密钥</el-button>
-            <el-button size="small" type="danger" link icon="Delete" @click="deleteCurrentChannel">解散渠道</el-button>
-          </template>
-          <el-input v-model="searchQuery" placeholder="搜模型..." style="width: 200px" prefix-icon="Search" clearable />
+    <div class="flex-1 bg-white p-6 rounded-lg shadow-sm border relative overflow-hidden">
+      <div class="flex justify-between items-start mb-6">
+        <div>
+          <div class="flex items-center gap-3 mb-1">
+            <h2 class="text-2xl font-extrabold text-gray-800 m-0">{{ activeChannel }}</h2>
+            <el-tag v-if="activeChannel === '未分类'" type="warning" effect="plain" size="small">系统暂存池</el-tag>
+          </div>
+          <div v-if="activeChannel !== '未分类'" class="flex gap-4 mt-2">
+            <el-button size="small" type="primary" link icon="Edit" @click="editCurrentChannel">配置渠道密钥</el-button>
+            <el-divider direction="vertical" />
+            <el-button size="small" type="danger" link icon="Delete" @click="deleteCurrentChannel">解散此渠道</el-button>
+          </div>
         </div>
-        <div class="flex gap-2">
-          <el-button type="danger" plain size="small" @click="handleCleanLost" icon="Delete">清理失效</el-button>
-          <el-button type="success" :loading="isSyncing" @click="handleSync" icon="Refresh">针对此渠道进货</el-button>
+
+        <div class="flex flex-col items-end gap-3">
+          <div class="flex gap-2">
+            <el-input v-model="searchQuery" placeholder="搜索模型名称..." style="width: 240px" prefix-icon="Search" clearable class="mr-2" />
+            <el-button-group>
+              <el-button type="danger" plain size="default" @click="handleCleanLost" icon="Delete">清理失效</el-button>
+              <el-button type="primary" :loading="isSyncing" @click="handleSync" icon="Download">同步进货</el-button>
+            </el-button-group>
+          </div>
+          <div class="text-xs text-gray-400">当前渠道共 {{ filteredModels.length }} 个模型可用</div>
         </div>
       </div>
 
@@ -133,10 +145,23 @@
 </template>
 
 <style scoped>
+/* 优化：增加阴影和动画感，更像是一个浮动的工具栏 */
 .batch-bar {
-  background: #f0f9eb; border: 1px solid #c2e7b0; padding: 10px 20px;
-  border-radius: 8px; margin-bottom: 15px; display: flex;
-  justify-content: space-between; align-items: center;
+  background: #ecf5ff; 
+  border: 1px solid #b3d8ff; 
+  padding: 12px 24px;
+  border-radius: 12px; 
+  margin-bottom: 20px; 
+  display: flex;
+  justify-content: space-between; 
+  align-items: center;
+  box-shadow: 0 4px 12px rgba(64, 158, 255, 0.1);
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from { transform: translateY(-10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
 }
 .lost-model { text-decoration: line-through; color: #909399; }
 .ml-auto { margin-left: auto; }
@@ -257,7 +282,12 @@ const handleSync = async () => {
   isSyncing.value = true
   try {
     const res = await api.post('/admin/sync-newapi', { channel_name: activeChannel.value })
-    ElMessage.success(`定向进货成功：新增 ${res.data.new_count} 个`)
+    // 💡 优化：把“失联数量”也展示出来，让管理员心里有数
+    if (res.data.lost_count > 0) {
+      ElMessage.warning(`进货完成：新增 ${res.data.new_count} 个，发现 ${res.data.lost_count} 个模型失联！`)
+    } else {
+      ElMessage.success(`定向进货成功：新增 ${res.data.new_count} 个`)
+    }
     fetchData()
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '进货失败，请检查该渠道的 URL 和 Key')

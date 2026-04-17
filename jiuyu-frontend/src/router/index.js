@@ -26,20 +26,20 @@ const router = createRouter({
         {
           path: 'drawing',
           component: () => import('../views/DrawingView.vue')
-        },
-      
-        {
-          path: 'admin-models',
-          name: 'admin-models',
-          component: () => import('../views/AdminModelsView.vue'),
-          meta: { title: '模型能力管理' }
         }
-        
-    
       ]
+    },
+    // 💡 核心绝杀：把后台路由移到这里！它现在和 dashboard 是平起平坐的，彻底摆脱前台导航栏！
+    {
+      path: '/admin-models',
+      name: 'admin-models',
+      component: () => import('../views/AdminModelsView.vue'),
+      meta: { title: '模型能力管理' }
     }
   ]
 })
+
+
 
 // 🛡️ 路由守卫：没带通行证的人，统统拦在门外！
 router.beforeEach((to, from, next) => {
