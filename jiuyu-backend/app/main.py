@@ -62,24 +62,42 @@ ai_client = AsyncOpenAI(
 class DrawRequest(BaseModel):
     prompt: str
     model: str
-    provider: str = "default"  # 👈 新增：明确发往哪个渠道
+    channel_name: str = "未分类"  # 👈 前端画图时必须带上文件夹名
     aspectRatio: Optional[str] = "1:1"
     imageSize: Optional[str] = "1K"
     style: Optional[str] = "none"
     urls: Optional[List[str]] = []
     
-# =========================================================
-# 📦 管理员模型配置的接收数据包
-# =========================================================
+# 💡 新增：文件夹创建请求包
+class ChannelFolderRequest(BaseModel):
+    name: str
+    base_url: str = ""
+    api_key: str = ""
+    
+# 1. 确保接收包裹允许前端传空值
 class ConfigUpdateRequest(BaseModel):
     model_config = {"protected_namespaces": ()} 
-    
+    id: Optional[int] = None
     model_name: str
-    provider: str = "default"             # 👈 新增：渠道商
-    api_protocol: str = "standard_openai" # 👈 新增：翻译官协议
-    is_image_model: bool
-    supported_ratios: List[Dict[str, str]]
-    supported_sizes: List[Dict[str, str]]
+    channel_name: str = "未分类"          
+    api_protocol: str = "standard_openai" 
+    is_image_model: bool = True
+    supported_ratios: Optional[list] = []
+    supported_sizes: Optional[list] = []
+
+ # 💡 新增：用于批量更新（如批量移动渠道、批量改协议）的请求体
+class BulkUpdateRequest(BaseModel):
+    ids: List[int] # 前端传过来的模型 ID 列表
+    channel_name: Optional[str] = None
+    api_protocol: Optional[str] = None
+
+# 💡 新增：用于批量删除的请求体
+class BulkDeleteRequest(BaseModel):
+    ids: List[int]
+
+
+
+
 
 # 🛡️ 密码加密机：使用极其安全的 bcrypt 算法
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -566,7 +584,7 @@ async def generate_image(request: DrawRequest, current_user: str = Depends(get_c
         # ==========================================
         model_config = db.query(models.ModelConfig).filter(
             models.ModelConfig.model_name == request.model,
-            models.ModelConfig.provider == request.provider
+            models.ModelConfig.channel_name == request.channel_name
         ).first()
         
         # 1. 严格获取协议（如果没有在数据库档案里，默认它是一个符合标准 OpenAI 协议的模型）
@@ -605,106 +623,171 @@ async def generate_image(request: DrawRequest, current_user: str = Depends(get_c
 # ⚙️ 模型动态配置中心 API (大厂标准)
 # =========================================================
 
-# --- 1. 写接口：管理员保存/更新模型配置 ---
-@app.post("/admin/model-configs/update")
-async def update_model_config(req: ConfigUpdateRequest, db: Session = Depends(get_db)):
-    # 💡 核心：按 模型名 + 渠道名 联合查找
-    config_record = db.query(models.ModelConfig).filter(
-        models.ModelConfig.model_name == req.model_name,
-        models.ModelConfig.provider == req.provider
-    ).first()
-    
-    if not config_record:
-        # 如果没有，就新建一条记录，并存入渠道名
-        config_record = models.ModelConfig(model_name=req.model_name, provider=req.provider)
-        db.add(config_record)
-        
-    # 覆盖更新为管理员在网页上配好的参数
-    config_record.api_protocol = req.api_protocol # 👈 写入翻译官协议
-    config_record.is_image_model = req.is_image_model
-    config_record.supported_ratios = req.supported_ratios
-    config_record.supported_sizes = req.supported_sizes
-    
-    db.commit()
-    return {"status": "success", "message": f"🎉 模型 [{req.model_name}] 配置已成功同步至全站！"}
 
+
+@app.post("/admin/model-configs/update", tags=["管理端"])
+async def update_model_config(req: ConfigUpdateRequest, db: Session = Depends(get_db)):
+    try:
+        import json
+        config_record = None
+        
+        # 1. 精准定位：如果前端传了 ID，直接按 ID 找
+        if getattr(req, "id", None):
+            config_record = db.query(models.ModelConfig).filter(models.ModelConfig.id == req.id).first()
+            
+        # 2. 兜底定位：按名字和【文件夹名】查找 (💡 彻底消灭 provider)
+        if not config_record:
+            config_record = db.query(models.ModelConfig).filter(
+                models.ModelConfig.model_name == req.model_name,
+                models.ModelConfig.channel_name == req.channel_name # 👈 修复点：改用 channel_name
+            ).first()
+            
+        # 3. 没找到就是新建
+        if not config_record:
+            config_record = models.ModelConfig(model_name=req.model_name)
+            db.add(config_record)
+            
+        # 开始更新字段
+        config_record.channel_name = req.channel_name
+        config_record.api_protocol = req.api_protocol
+        config_record.is_image_model = getattr(req, "is_image_model", True)
+        
+        # 强制转为 JSON 字符串，防止 SQLite 崩溃
+        config_record.supported_ratios = json.dumps(req.supported_ratios) if getattr(req, "supported_ratios", None) else "[]"
+        config_record.supported_sizes = json.dumps(req.supported_sizes) if getattr(req, "supported_sizes", None) else "[]"
+        
+        db.commit()
+        return {"status": "success", "message": f"🎉 模型 [{req.model_name}] 已成功转移并配置！"}
+
+    except Exception as e:
+        db.rollback()
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=f"后端存入崩溃: {str(e)}")
+
+# =================================================================
+# 🚀 批量大管家接口：批量更新 / 批量删除 / 清理失联
+# =================================================================
+@app.post("/admin/models/bulk-update", tags=["管理端"])
+async def bulk_update_models(req: BulkUpdateRequest, db: Session = Depends(get_db)):
+    """批量修改选定模型的渠道归属或协议"""
+    try:
+        models_to_update = db.query(models.ModelConfig).filter(models.ModelConfig.id.in_(req.ids)).all()
+        for m in models_to_update:
+            if req.channel_name is not None:
+                m.channel_name = req.channel_name
+            if req.api_protocol is not None:
+                m.api_protocol = req.api_protocol
+        db.commit()
+        return {"status": "success", "message": f"成功批量更新了 {len(models_to_update)} 个模型！"}
+    except Exception as e:
+        db.rollback()
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/admin/models/bulk-delete", tags=["管理端"])
+async def bulk_delete_models(req: BulkDeleteRequest, db: Session = Depends(get_db)):
+    """物理删除选定的模型（单删也是调这个）"""
+    try:
+        db.query(models.ModelConfig).filter(models.ModelConfig.id.in_(req.ids)).delete(synchronize_session=False)
+        db.commit()
+        return {"status": "success", "message": f"成功删除了 {len(req.ids)} 个模型记录。"}
+    except Exception as e:
+        db.rollback()
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/admin/models/clean-lost", tags=["管理端"])
+async def clean_lost_models(db: Session = Depends(get_db)):
+    """一键清理当前系统内所有 is_lost=True 的幽灵模型"""
+    try:
+        deleted_count = db.query(models.ModelConfig).filter(models.ModelConfig.is_lost == True).delete()
+        db.commit()
+        return {"status": "success", "message": f"世界清静了，共清理 {deleted_count} 个失联模型。"}
+    except Exception as e:
+        db.rollback()
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(e))
+
+# =========================================================
+# 📂 文件夹 (渠道) 管理与 NewAPI 极速同步引擎
+# =========================================================
+@app.get("/admin/folders", tags=["管理端"])
+def get_channel_folders(db: Session = Depends(get_db)):
+    return {"status": "success", "folders": db.query(models.ImageChannelFolder).all()}
+
+@app.post("/admin/folders", tags=["管理端"])
+def create_channel_folder(req: ChannelFolderRequest, db: Session = Depends(get_db)):
+    folder = db.query(models.ImageChannelFolder).filter(models.ImageChannelFolder.name == req.name).first()
+    if not folder:
+        db.add(models.ImageChannelFolder(name=req.name, base_url=req.base_url, api_key=req.api_key))
+    else:
+        folder.base_url, folder.api_key = req.base_url, req.api_key
+    db.commit()
+    return {"status": "success"}
+
+@app.get("/admin/all-models", tags=["管理端"])
+def get_all_models_for_admin(db: Session = Depends(get_db)):
+    return {"status": "success", "models": db.query(models.ModelConfig).all()}
+
+@app.post("/admin/sync-newapi", tags=["管理端"])
+def sync_newapi(db: Session = Depends(get_db)):
+    # 💡 使用全局环境里的管理员总钥匙去 NewAPI 进货
+    base_url = os.getenv("AI_BASE_URL", "http://127.0.0.1:3000/v1").replace("/v1", "")
+    api_key = os.getenv("AI_API_KEY", "")
+    try:
+        res = requests.get(f"{base_url}/v1/models", headers={"Authorization": f"Bearer {api_key}"}, timeout=10)
+        res.raise_for_status()
+        newapi_models = [m["id"] for m in res.json().get("data", [])]
+
+        local_models = db.query(models.ModelConfig).all()
+        local_names = {m.model_name for m in local_models}
+
+        new_count, lost_count = 0, 0
+        # 1. 发现新模型，扔进未分类暂存池
+        for name in newapi_models:
+            if name not in local_names:
+                db.add(models.ModelConfig(model_name=name, channel_name="未分类", api_protocol="standard_openai", is_image_model=True))
+                new_count += 1
+                
+        # 2. 检查本地模型是否在 NewAPI 丢失
+        for m in local_models:
+            if m.model_name not in newapi_models and not m.is_lost:
+                m.is_lost = True
+                lost_count += 1
+            elif m.model_name in newapi_models and m.is_lost:
+                m.is_lost = False
+                
+        db.commit()
+        return {"status": "success", "new_count": new_count, "lost_count": lost_count}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+
+@app.get("/drawing/models", tags=["AI 创作"])
+async def get_available_models(db: Session = Depends(get_db)):
+    configs = db.query(models.ModelConfig).filter(models.ModelConfig.is_image_model == True).all()
+    grouped_models = {}
+    for c in configs:
+        # 💡 画板绝对不展示“未分类”或“已丢失”的模型
+        if c.channel_name == "未分类" or c.is_lost: continue
+        if c.channel_name not in grouped_models: grouped_models[c.channel_name] = []
+        grouped_models[c.channel_name].append(c.model_name)
+    return {"status": "success", "models": grouped_models}
 
 @app.get("/drawing/model-configs")
 def get_dynamic_model_configs(db: Session = Depends(get_db)):
     import json
-    db_configs = db.query(models.ModelConfig).all()
-    result_configs = {}
-    for config in db_configs:
-        try:
-            ratios = json.loads(config.supported_ratios) if isinstance(config.supported_ratios, str) else config.supported_ratios
-            sizes = json.loads(config.supported_sizes) if isinstance(config.supported_sizes, str) else config.supported_sizes
-        except:
-            ratios = config.supported_ratios
-            sizes = config.supported_sizes
-            
-        # 💡 核心：Key必须是 "渠道::模型" 防覆盖
-        unique_key = f"{config.provider}::{config.model_name}"
-        result_configs[unique_key] = {
-            "is_image_model": config.is_image_model,
-            "ratios": ratios,
-            "sizes": sizes
-        }
-    return {"status": "success", "configs": result_configs}
-
-@app.get("/drawing/models", tags=["AI 创作"], summary="🔍 动态获取可用模型列表")
-async def get_available_models(db: Session = Depends(get_db)):
-    # 💡 核心升级：不再去外网网关拉数据，直接从数据库读取我们配置好的“渠道+模型”
-    configs = db.query(models.ModelConfig).filter(models.ModelConfig.is_image_model == True).all()
-    grouped_models = {}
+    configs = db.query(models.ModelConfig).all()
+    res = {}
     for c in configs:
-        if c.provider not in grouped_models:
-            grouped_models[c.provider] = []
-        if c.model_name not in grouped_models[c.provider]:
-            grouped_models[c.provider].append(c.model_name)
-            
-    return {"status": "success", "models": grouped_models}
+        unique_key = f"{c.channel_name}::{c.model_name}"
+        res[unique_key] = {
+            "ratios": c.supported_ratios if isinstance(c.supported_ratios, list) else [],
+            "sizes": c.supported_sizes if isinstance(c.supported_sizes, list) else []
+        }
+    return {"status": "success", "configs": res}
+
+
     
-# =========================================================
-# 📡 管理后台：NewAPI 模型极速抓取通道 (防弹容错版)
-# =========================================================
-@app.get("/admin/newapi/models")
-def get_admin_newapi_models():
-    import requests
-    import os
-    import json
-    
-    # 严谨清理 URL，防止 /api 或 /v1 拼错
-    base_url = os.getenv("AI_BASE_URL", "").strip().rstrip("/")
-    base_url = base_url.replace("/api", "").replace("/v1", "")
-    
-    api_key = os.getenv("AI_API_KEY", "").strip()
-    url = f"{base_url}/v1/models"
-    
-    try:
-        headers = {"Authorization": f"Bearer {api_key}"}
-        resp = requests.get(url, headers=headers, timeout=10, allow_redirects=False)
-        raw_text = resp.text.strip()
-        
-        # 拦截网页错误
-        if raw_text.startswith("<"):
-            return {"status": "error", "message": f"网关返回了网页代码 (HTTP {resp.status_code})，请检查网关状态"}
-            
-        # 尝试解析 JSON
-        try:
-            data = json.loads(raw_text)
-        except json.JSONDecodeError:
-            return {"status": "error", "message": "网关返回的数据不是合法的 JSON 格式"}
-            
-        # ✅ 成功提取模型
-        if "data" in data:
-            model_names = [m.get("id") for m in data.get("data", [])]
-            return {"status": "success", "models": model_names}
-        elif "error" in data:
-            err_msg = data["error"].get("message", "未知错误")
-            return {"status": "error", "message": f"网关报错: {err_msg}"}
-        else:
-            return {"status": "error", "message": "返回了未知的 JSON 结构"}
-            
-    except Exception as e:
-        return {"status": "error", "message": f"请求异常: {str(e)}"}
-    
+

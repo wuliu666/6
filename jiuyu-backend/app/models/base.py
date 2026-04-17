@@ -54,16 +54,28 @@ from sqlalchemy import JSON, Boolean
 # =========================================================
 # ⚙️ 模型动态配置表 (大厂标准动态注册中心)
 # =========================================================
+class ImageChannelFolder(Base):
+    """💡 新增：专门用于管理生图模型的 API 渠道 (文件夹)"""
+    __tablename__ = "image_channel_folders"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, index=True, nullable=False)
+    base_url = Column(String(255), nullable=True) # 文件夹专属中转地址
+    api_key = Column(String(255), nullable=True)  # 文件夹专属密钥
+
 class ModelConfig(Base):
     __tablename__ = "model_configs"
     
     id = Column(Integer, primary_key=True, index=True)
     model_name = Column(String(100), index=True, nullable=False)
-    provider = Column(String(50), default="default") 
-    is_image_model = Column(Boolean, default=False)  
     
-    # 💡 核心升级：增加“接口协议”字段，用来决定这台模型分配给哪个翻译官！
+    # 💡 核心升级：原本的 provider 升级为 channel_name，直接归属文件夹
+    channel_name = Column(String(100), index=True, default="未分类") 
+    
+    is_image_model = Column(Boolean, default=True)  
     api_protocol = Column(String(50), default="standard_openai") 
+    
+    # 💡 新增：用于在后台标红预警，标记 NewAPI 上游是否已将此模型下架
+    is_lost = Column(Boolean, default=False)
     
     supported_ratios = Column(JSON, default=list) 
     supported_sizes = Column(JSON, default=list)

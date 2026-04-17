@@ -15,15 +15,15 @@
       </div>
 
       <div class="control-group">
-        <label>1. API 渠道 <el-tag size="small" type="success" v-if="Object.keys(groupedModels).length > 0">已连通</el-tag></label>
-        <el-select v-model="drawParams.provider" placeholder="请先选择渠道" @change="handleProviderChange" style="width: 100%" :loading="isLoadingModels">
+        <label>1. API 展示柜 (渠道) <el-tag size="small" type="success" v-if="Object.keys(groupedModels).length > 0">已连通</el-tag></label>
+        <el-select v-model="drawParams.channel_name" placeholder="请先选择渠道" @change="handleProviderChange" style="width: 100%" :loading="isLoadingModels">
           <el-option v-for="key in Object.keys(groupedModels)" :key="key" :label="key" :value="key" />
         </el-select>
       </div>
 
       <div class="control-group">
         <label>2. 核心绘画引擎</label>
-        <el-select v-model="drawParams.model" placeholder="请选择具体模型" style="width: 100%" :disabled="!drawParams.provider">
+        <el-select v-model="drawParams.model" placeholder="请选择具体模型" style="width: 100%" :disabled="!drawParams.channel_name">
           <el-option v-for="m in currentChannelModels" :key="m" :label="m" :value="m" />
         </el-select>
       </div>
@@ -150,7 +150,7 @@ const drawParams = reactive({
   size: '2K',
   style: 'none',
   model: '',
-  provider: '', // 👈 新增渠道字段
+  channel_name: '',
   referenceImages: [] 
 })
 
@@ -176,7 +176,7 @@ const currentImage = ref('')
 
 // 💡 联动逻辑
 const currentChannelModels = computed(() => {
-  return groupedModels.value[drawParams.provider] || []
+  return groupedModels.value[drawParams.channel_name] || []
 })
 
 const handleProviderChange = () => {
@@ -250,7 +250,7 @@ const fetchModels = async () => {
       groupedModels.value = response.data.models
       const providers = Object.keys(groupedModels.value)
       if (providers.length > 0) {
-        drawParams.provider = providers[0]
+        drawParams.channel_name = providers[0]
         drawParams.model = groupedModels.value[providers[0]][0] || ''
       }
     }
